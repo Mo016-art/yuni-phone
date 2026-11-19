@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_desc">用于显示 char 悬浮球、在你开启后读取屏幕文字、代你点击，以及按你的设置锁定指定 APP。支付、银行类应用和密码框不会被读取。</string>
+</resources>
