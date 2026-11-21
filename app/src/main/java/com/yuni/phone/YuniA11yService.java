@@ -2,6 +2,16 @@ package com.yuni.phone;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
+import android.app.AlarmManager;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
+import android.os.PowerManager;
+import java.util.Calendar;
+import org.json.JSONArray;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -15,30 +25,38 @@ import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Base64;
 import android.util.DisplayMetrics;
+import android.view.Display;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewOutlineProvider;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.ValueCallback;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import org.json.JSONObject;
+import org.json.JSONTokener;
+import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class YuniA11yService extends AccessibilityService {
     public static YuniA11yService inst;
@@ -64,9 +82,17 @@ public class YuniA11yService extends AccessibilityService {
     WindowManager.LayoutParams ballLp;
     TextView bubble;
     LinearLayout panel;
+    WindowManager.LayoutParams panelLp;
     EditText panelEt;
+    int ballBaseY = 0;
+    int panelBaseY = 0;
+    int liftPx = 0;
+    boolean insetsSeen = false;
     long lastKick = 0;
     String lastPkg = "";
+    BroadcastReceiver tickRx;
+    static final String ACT_TICK = "com.yuni.phone.PROACTIVE_TICK";
+    String lastLine = "";
     final Runnable hideBubbleRun = new Runnable() {
         public void run() {
             removeBubble();
@@ -107,6 +133,7 @@ public class YuniA11yService extends AccessibilityService {
         agent = new YuniAgent(this);
         SharedPreferences p = sp();
         if (p.getBoolean("ball_on", false) && p.getBoolean("auto", true)) showBall();
+        scheduleProactive();
     }
 
     @Override
@@ -116,6 +143,7 @@ public class YuniA11yService extends AccessibilityService {
         closePanel();
         removeBubble();
         removeBall();
+        cancelProactive();
         inst = null;
         return super.onUnbind(i);
     }
@@ -165,6 +193,142 @@ public class YuniA11yService extends AccessibilityService {
         });
     }
 
+    // ---------- 后台主动找你：定时 + 通知 ----------
+    PendingIntent tickPi() {
+        Intent it = new Intent(ACT_TICK).setPackage(getPackageName());
+        return PendingIntent.getBroadcast(this, 7, it,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    void cancelProactive() {
+        try {
+            AlarmManager am = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+            if (am != null) am.cancel(tickPi());
+        } catch (Exception e) {
+        }
+        if (tickRx != null) {
+            try {
+                unregisterReceiver(tickRx);
+            } catch (Exception e) {
+            }
+            tickRx = null;
+        }
+    }
+
+    public void scheduleProactive() {
+        try {
+            AlarmManager am = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+            PendingIntent pi = tickPi();
+            if (am != null) am.cancel(pi);
+            if (!sp().getBoolean("pro_on", false)) return;
+            if (tickRx == null) {
+                tickRx = new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context c, Intent i) {
+                        onProTick();
+                    }
+                };
+                IntentFilter f = new IntentFilter(ACT_TICK);
+                if (Build.VERSION.SDK_INT >= 33) {
+                    registerReceiver(tickRx, f, Context.RECEIVER_NOT_EXPORTED);
+                } else {
+                    registerReceiver(tickRx, f);
+                }
+            }
+            int min = Math.max(5, sp().getInt("pro_min", 60));
+            long ms = (long) (min * 60000L * (0.8 + Math.random() * 0.4));
+            if (am != null) am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + ms, pi);
+        } catch (Exception e) {
+        }
+    }
+
+    void onProTick() {
+        scheduleProactive();
+        if (agent == null || agent.isRunning()) return;
+        SharedPreferences p = sp();
+        int hr = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
+        int qs = p.getInt("pro_qs", 23);
+        int qe = p.getInt("pro_qe", 8);
+        boolean quiet = qs == qe ? false : (qs > qe ? (hr >= qs || hr < qe) : (hr >= qs && hr < qe));
+        if (quiet) return;
+        if (p.getBoolean("pro_screen", true)) {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null && !pm.isInteractive()) return;
+        }
+        agent.proactive(false);
+    }
+
+    // char 主动说的话：悬浮球字幕 + 系统通知 + 存进收件箱（打开小手机后同步进传讯）
+    public void deliver(final String msg) {
+        addInbox(msg);
+        h.post(new Runnable() {
+            public void run() {
+                if (ball != null) say(msg, 12000);
+                notifyMsg(msg);
+            }
+        });
+    }
+
+    void addInbox(String msg) {
+        try {
+            JSONArray a = new JSONArray(sp().getString("inbox", "[]"));
+            JSONObject o = new JSONObject();
+            o.put("t", msg);
+            o.put("ts", System.currentTimeMillis());
+            a.put(o);
+            JSONArray keep = new JSONArray();
+            for (int i = Math.max(0, a.length() - 30); i < a.length(); i++) keep.put(a.get(i));
+            sp().edit().putString("inbox", keep.toString()).apply();
+        } catch (Exception e) {
+        }
+    }
+
+    void notifyMsg(String msg) {
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null || !nm.areNotificationsEnabled()) return;
+            if (Build.VERSION.SDK_INT >= 26) {
+                nm.createNotificationChannel(new NotificationChannel("char_msg", "char 的消息",
+                    NotificationManager.IMPORTANCE_HIGH));
+            }
+            Intent open = new Intent(this, MainActivity.class);
+            open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            PendingIntent pi = PendingIntent.getActivity(this, 1, open,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(this, "char_msg") : new Notification.Builder(this);
+            b.setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setContentTitle(sp().getString("char_name", "char"))
+                .setContentText(msg)
+                .setStyle(new Notification.BigTextStyle().bigText(msg))
+                .setLargeIcon(avatarBitmap(dp(48) * 2))
+                .setContentIntent(pi)
+                .setAutoCancel(true);
+            if (Build.VERSION.SDK_INT < 26) b.setPriority(Notification.PRIORITY_HIGH);
+            nm.notify((int) (System.currentTimeMillis() / 1000L), b.build());
+        } catch (Exception e) {
+        }
+    }
+
+    // ---------- 通用样式 ----------
+    GradientDrawable frost(int radius) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(Color.parseColor("#B8FFFFFF"));
+        g.setCornerRadius(radius);
+        g.setStroke(dp(1), Color.parseColor("#66FFFFFF"));
+        return g;
+    }
+
+    void blur(WindowManager.LayoutParams lp) {
+        if (Build.VERSION.SDK_INT >= 31) {
+            try {
+                lp.flags |= WindowManager.LayoutParams.FLAG_BLUR_BEHIND;
+                lp.setBlurBehindRadius(dp(22));
+            } catch (Throwable t) {
+            }
+        }
+    }
+
     // ---------- 悬浮球 ----------
     Bitmap avatarBitmap(int size) {
         String av = sp().getString("char_avatar", "");
@@ -197,10 +361,10 @@ public class YuniA11yService extends AccessibilityService {
             public void run() {
                 if (wm == null) return;
                 removeBall();
-                int size = dp(56);
+                int size = dp(44);
                 ImageView iv = new ImageView(YuniA11yService.this);
                 iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                iv.setImageBitmap(avatarBitmap(size * 2));
+                iv.setImageBitmap(avatarBitmap(size * 3));
                 iv.setOutlineProvider(new ViewOutlineProvider() {
                     @Override
                     public void getOutline(View v, Outline o) {
@@ -267,6 +431,16 @@ public class YuniA11yService extends AccessibilityService {
         int sx, sy;
         float tx, ty;
         boolean moved;
+        boolean down;
+        boolean longDone;
+        final Runnable longRun = new Runnable() {
+            public void run() {
+                if (down && !moved) {
+                    longDone = true;
+                    openApp();
+                }
+            }
+        };
 
         public boolean onTouch(View v, MotionEvent e) {
             if (ballLp == null) return false;
@@ -277,12 +451,18 @@ public class YuniA11yService extends AccessibilityService {
                     tx = e.getRawX();
                     ty = e.getRawY();
                     moved = false;
+                    down = true;
+                    longDone = false;
+                    h.postDelayed(longRun, 650);
                     return true;
                 case MotionEvent.ACTION_MOVE:
                     float dx = e.getRawX() - tx;
                     float dy = e.getRawY() - ty;
-                    if (Math.abs(dx) > dp(6) || Math.abs(dy) > dp(6)) moved = true;
-                    if (moved) {
+                    if (Math.abs(dx) > dp(6) || Math.abs(dy) > dp(6)) {
+                        moved = true;
+                        h.removeCallbacks(longRun);
+                    }
+                    if (moved && panel == null) {
                         ballLp.x = sx + (int) dx;
                         ballLp.y = sy + (int) dy;
                         try {
@@ -292,8 +472,12 @@ public class YuniA11yService extends AccessibilityService {
                     }
                     return true;
                 case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    down = false;
+                    h.removeCallbacks(longRun);
+                    if (longDone) return true;
                     if (!moved) onBallTap();
-                    else snap();
+                    else if (panel == null) snap();
                     return true;
             }
             return false;
@@ -318,11 +502,8 @@ public class YuniA11yService extends AccessibilityService {
             subtitleEnd(2500);
             return;
         }
-        if (panel != null) {
-            closePanel();
-        } else {
-            openPanel();
-        }
+        if (panel != null) closePanel();
+        else openPanel();
     }
 
     void openApp() {
@@ -334,7 +515,7 @@ public class YuniA11yService extends AccessibilityService {
         }
     }
 
-    // ---------- 输入框 ----------
+    // ---------- 输入框：从头像侧边延展出来，被键盘顶起 ----------
     class Panel extends LinearLayout {
         Panel(Context c) {
             super(c);
@@ -351,70 +532,35 @@ public class YuniA11yService extends AccessibilityService {
     }
 
     void openPanel() {
-        if (wm == null || panel != null) return;
+        if (wm == null || panel != null || ballLp == null) return;
         removeBubble();
-        SharedPreferences p = sp();
-        String name = p.getString("char_name", "char");
-        boolean act = p.getBoolean("opt_act", false);
-        boolean see = p.getBoolean("opt_see", false);
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        int size = ballLp.width;
+        boolean right = ballLp.x + size / 2 >= dm.widthPixels / 2;
+        int space = right ? ballLp.x : dm.widthPixels - ballLp.x - size;
+        int pw = Math.min(dp(228), space - dp(12));
+        if (pw < dp(150)) pw = dp(150);
+        int ph = dp(40);
+        String name = sp().getString("char_name", "char");
 
         Panel root = new Panel(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.parseColor("#FAFFFFFF"));
-        bg.setCornerRadius(dp(18));
-        bg.setStroke(dp(1), Color.parseColor("#E8D5E8"));
-        root.setBackground(bg);
-        int pd = dp(12);
-        root.setPadding(pd, dp(10), pd, pd);
+        root.setOrientation(LinearLayout.HORIZONTAL);
+        root.setGravity(Gravity.CENTER_VERTICAL);
+        root.setBackground(frost(dp(20)));
+        root.setPadding(dp(14), 0, dp(4), 0);
 
-        LinearLayout top = new LinearLayout(this);
-        top.setOrientation(LinearLayout.HORIZONTAL);
-        top.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = new TextView(this);
-        title.setText(name + (act ? " · 可以帮你操作手机" : (see ? " · 能看屏幕" : " · 在听")));
-        title.setTextColor(Color.parseColor("#4A3B4D"));
-        title.setTextSize(13);
-        top.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        TextView back = new TextView(this);
-        back.setText("回小手机");
-        back.setTextColor(Color.parseColor("#8A7A8D"));
-        back.setTextSize(12);
-        back.setPadding(dp(8), dp(4), dp(8), dp(4));
-        back.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                closePanel();
-                openApp();
-            }
-        });
-        top.addView(back);
-        TextView x = new TextView(this);
-        x.setText("✕");
-        x.setTextColor(Color.parseColor("#8A7A8D"));
-        x.setTextSize(15);
-        x.setPadding(dp(8), dp(4), dp(4), dp(4));
-        x.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                closePanel();
-            }
-        });
-        top.addView(x);
-        root.addView(top);
-
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
         EditText et = new EditText(this);
-        et.setHint("对 " + name + " 说点什么…");
-        et.setTextSize(15);
-        et.setSingleLine(true);
-        et.setImeOptions(EditorInfo.IME_ACTION_SEND);
+        et.setHint("对 " + name + " 说…");
+        et.setHintTextColor(Color.parseColor("#99555555"));
         et.setTextColor(Color.parseColor("#2A2230"));
-        GradientDrawable eg = new GradientDrawable();
-        eg.setColor(Color.parseColor("#F3EEF3"));
-        eg.setCornerRadius(dp(14));
-        et.setBackground(eg);
-        et.setPadding(dp(12), dp(8), dp(12), dp(8));
+        et.setTextSize(13.5f);
+        et.setSingleLine(true);
+        et.setBackground(null);
+        et.setPadding(0, 0, 0, 0);
+        et.setMinHeight(0);
+        et.setMinimumHeight(0);
+        et.setIncludeFontPadding(false);
+        et.setImeOptions(EditorInfo.IME_ACTION_SEND);
         et.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             public boolean onEditorAction(TextView v, int actionId, KeyEvent ev) {
                 if (actionId == EditorInfo.IME_ACTION_SEND || actionId == EditorInfo.IME_ACTION_DONE) {
@@ -424,50 +570,63 @@ public class YuniA11yService extends AccessibilityService {
                 return false;
             }
         });
-        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        row.addView(et, elp);
+        root.addView(et, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
         TextView send = new TextView(this);
-        send.setText("发送");
+        send.setText("↑");
         send.setTextColor(Color.WHITE);
-        send.setTextSize(14);
+        send.setTextSize(16);
         send.setGravity(Gravity.CENTER);
         GradientDrawable sg = new GradientDrawable();
-        sg.setColor(Color.parseColor("#3A3A42"));
-        sg.setCornerRadius(dp(14));
+        sg.setShape(GradientDrawable.OVAL);
+        sg.setColor(Color.parseColor("#CC3A3A42"));
         send.setBackground(sg);
-        send.setPadding(dp(16), dp(9), dp(16), dp(9));
         send.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 submit();
             }
         });
-        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        slp.leftMargin = dp(8);
-        row.addView(send, slp);
-        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        rlp.topMargin = dp(8);
-        root.addView(row, rlp);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(dp(30), dp(30));
+        slp.leftMargin = dp(6);
+        root.addView(send, slp);
 
-        DisplayMetrics dm = getResources().getDisplayMetrics();
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-            dm.widthPixels - dp(24),
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            pw, ph,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT);
-        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        lp.y = dp(12);
-        lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.x = right ? ballLp.x - dp(6) - pw : ballLp.x + size + dp(6);
+        panelBaseY = ballLp.y + (size - ph) / 2;
+        ballBaseY = ballLp.y;
+        liftPx = 0;
+        insetsSeen = false;
+        lp.y = panelBaseY;
+        lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
             | WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE;
+        blur(lp);
+
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets ins) {
+                insetsSeen = true;
+                int kb;
+                if (Build.VERSION.SDK_INT >= 30) kb = ins.getInsets(WindowInsets.Type.ime()).bottom;
+                else kb = ins.getSystemWindowInsetBottom();
+                liftFor(kb);
+                return ins;
+            }
+        });
+
         try {
             wm.addView(root, lp);
             panel = root;
+            panelLp = lp;
             panelEt = et;
         } catch (Exception e) {
             return;
         }
+        root.requestApplyInsets();
         et.requestFocus();
         final EditText fet = et;
         h.postDelayed(new Runnable() {
@@ -479,6 +638,37 @@ public class YuniA11yService extends AccessibilityService {
                 }
             }
         }, 250);
+        // 系统没把键盘高度告诉我们时，按常见键盘高度估一个
+        h.postDelayed(new Runnable() {
+            public void run() {
+                if (panel != null && !insetsSeen) {
+                    liftFor((int) (getResources().getDisplayMetrics().heightPixels * 0.40f));
+                }
+            }
+        }, 700);
+    }
+
+    void liftFor(int kb) {
+        if (panel == null || panelLp == null || ballLp == null) return;
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        int lift = 0;
+        if (kb > dp(120)) {
+            int limit = dm.heightPixels - kb - dp(12);
+            int bottom = Math.max(panelBaseY + panelLp.height, ballBaseY + ballLp.height);
+            lift = Math.max(0, bottom - limit);
+        }
+        if (lift == liftPx) return;
+        liftPx = lift;
+        panelLp.y = panelBaseY - lift;
+        ballLp.y = ballBaseY - lift;
+        try {
+            wm.updateViewLayout(panel, panelLp);
+        } catch (Exception e) {
+        }
+        try {
+            if (ball != null) wm.updateViewLayout(ball, ballLp);
+        } catch (Exception e) {
+        }
     }
 
     void submit() {
@@ -486,7 +676,43 @@ public class YuniA11yService extends AccessibilityService {
         String s = panelEt.getText().toString().trim();
         closePanel();
         if (s.length() == 0 || agent == null) return;
-        agent.start(s);
+        startWithCtx(s);
+    }
+
+    // 发送前向小手机页面要一份最新的「人设 / 关系 / 记忆 / 最近聊天」
+    void startWithCtx(final String s) {
+        final AtomicBoolean started = new AtomicBoolean(false);
+        final Runnable go = new Runnable() {
+            public void run() {
+                if (started.compareAndSet(false, true)) agent.start(s);
+            }
+        };
+        MainActivity a = MainActivity.inst;
+        if (a == null || a.w == null) {
+            go.run();
+            return;
+        }
+        h.postDelayed(go, 1500);
+        try {
+            a.w.evaluateJavascript(
+                "(function(){try{return window.__ntCtx?window.__ntCtx():''}catch(e){return ''}})()",
+                new ValueCallback<String>() {
+                    public void onReceiveValue(String v) {
+                        try {
+                            Object o = new JSONTokener(v).nextValue();
+                            if (o instanceof String && ((String) o).length() > 0) {
+                                sp().edit().putString("char_context", (String) o).apply();
+                            }
+                        } catch (Exception e) {
+                        }
+                        h.removeCallbacks(go);
+                        go.run();
+                    }
+                });
+        } catch (Exception e) {
+            h.removeCallbacks(go);
+            go.run();
+        }
     }
 
     void closePanel() {
@@ -501,10 +727,19 @@ public class YuniA11yService extends AccessibilityService {
         } catch (Exception e) {
         }
         panel = null;
+        panelLp = null;
         panelEt = null;
+        if (ballLp != null && liftPx != 0) {
+            ballLp.y = ballBaseY;
+            liftPx = 0;
+            try {
+                if (ball != null) wm.updateViewLayout(ball, ballLp);
+            } catch (Exception e) {
+            }
+        }
     }
 
-    // ---------- 字幕（char 说话，实时更新） ----------
+    // ---------- 字幕：贴在头像侧边，边说边长 ----------
     public void subtitle(final String text) {
         h.post(new Runnable() {
             public void run() {
@@ -513,7 +748,7 @@ public class YuniA11yService extends AccessibilityService {
                 if (bubble == null) createBubble();
                 if (bubble != null) {
                     String t = text == null ? "" : text;
-                    if (t.length() > 280) t = "…" + t.substring(t.length() - 280);
+                    if (t.length() > 260) t = "…" + t.substring(t.length() - 260);
                     bubble.setText(t);
                 }
             }
@@ -535,19 +770,22 @@ public class YuniA11yService extends AccessibilityService {
     }
 
     void createBubble() {
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        int size = ballLp != null ? ballLp.width : dp(44);
+        int bx = ballLp != null ? ballLp.x : dm.widthPixels - size - dp(4);
+        int by = ballLp != null ? ballLp.y : dp(220);
+        boolean right = bx + size / 2 >= dm.widthPixels / 2;
+        int space = right ? bx : dm.widthPixels - bx - size;
+
         TextView t = new TextView(this);
-        t.setTextColor(Color.parseColor("#4A3B4D"));
-        t.setTextSize(13.5f);
-        t.setMaxWidth(dp(250));
+        t.setTextColor(Color.parseColor("#3A2F3D"));
+        t.setTextSize(13f);
+        t.setMaxWidth(Math.max(dp(120), Math.min(dp(210), space - dp(10))));
         t.setMaxLines(10);
-        t.setLineSpacing(0f, 1.15f);
-        int pd = dp(10);
-        t.setPadding(pd, pd, pd, pd);
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(Color.parseColor("#F7FFFFFF"));
-        g.setCornerRadius(dp(14));
-        g.setStroke(dp(1), Color.parseColor("#E8D5E8"));
-        t.setBackground(g);
+        t.setLineSpacing(0f, 1.12f);
+        t.setPadding(dp(11), dp(8), dp(11), dp(8));
+        t.setBackground(frost(dp(16)));
+
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -555,17 +793,11 @@ public class YuniA11yService extends AccessibilityService {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT);
-        DisplayMetrics dm = getResources().getDisplayMetrics();
-        int bx = ballLp != null ? ballLp.x : dp(12);
-        int by = ballLp != null ? ballLp.y : dp(200);
-        lp.x = Math.max(dp(8), Math.min(bx, dm.widthPixels - dp(270)));
-        if (by > dm.heightPixels * 0.55f) {
-            lp.gravity = Gravity.BOTTOM | Gravity.START;
-            lp.y = dm.heightPixels - by + dp(6);
-        } else {
-            lp.gravity = Gravity.TOP | Gravity.START;
-            lp.y = by + dp(62);
-        }
+        boolean low = by > dm.heightPixels * 0.62f;
+        lp.gravity = (low ? Gravity.BOTTOM : Gravity.TOP) | (right ? Gravity.END : Gravity.START);
+        lp.x = right ? dm.widthPixels - bx + dp(6) : bx + size + dp(6);
+        lp.y = low ? dm.heightPixels - (by + size) : by;
+        blur(lp);
         try {
             wm.addView(t, lp);
             bubble = t;
@@ -597,29 +829,37 @@ public class YuniA11yService extends AccessibilityService {
         if (isBlocked(pkg)) return "[该应用已被保护，不读取内容]";
         StringBuilder sb = new StringBuilder();
         sb.append("[当前应用 ").append(pkg).append("]\n");
-        walk(root, sb, 0);
+        lastLine = "";
+        walk(root, sb, 0, false);
         if (sb.length() > 6000) return sb.substring(0, 6000);
         return sb.toString();
     }
 
-    void walk(AccessibilityNodeInfo n, StringBuilder sb, int depth) {
+    void walk(AccessibilityNodeInfo n, StringBuilder sb, int depth, boolean ancClick) {
         if (n == null || sb.length() > 6000 || depth > 40) return;
+        boolean canClick = ancClick || n.isClickable();
         if (!n.isPassword() && n.isVisibleToUser()) {
             CharSequence t = n.getText();
             CharSequence d = n.getContentDescription();
             String s = (t != null && t.length() > 0) ? t.toString() : (d != null ? d.toString() : "");
             if (s.length() > 0) {
-                sb.append(s.replace('\n', ' '));
-                if (n.isClickable()) {
+                StringBuilder ln = new StringBuilder(s.replace('\n', ' '));
+                if (n.isSelected() || n.isChecked()) ln.append(" [已选中]");
+                if (n.isEditable()) ln.append(" [输入框]");
+                if (canClick) {
                     Rect r = new Rect();
                     n.getBoundsInScreen(r);
-                    sb.append(" [可点 ").append(r.centerX()).append(",").append(r.centerY()).append("]");
+                    ln.append(" [可点 ").append(r.centerX()).append(",").append(r.centerY()).append("]");
                 }
-                sb.append('\n');
+                String line = ln.toString();
+                if (!line.equals(lastLine)) {
+                    sb.append(line).append('\n');
+                    lastLine = line;
+                }
             }
         }
         for (int i = 0; i < n.getChildCount(); i++) {
-            walk(n.getChild(i), sb, depth + 1);
+            walk(n.getChild(i), sb, depth + 1, canClick);
         }
     }
 
@@ -627,7 +867,7 @@ public class YuniA11yService extends AccessibilityService {
         if (blockedNow()) return false;
         Path p = new Path();
         p.moveTo(x, y);
-        GestureDescription.StrokeDescription s = new GestureDescription.StrokeDescription(p, 0, 60);
+        GestureDescription.StrokeDescription s = new GestureDescription.StrokeDescription(p, 0, 50);
         return dispatchGesture(new GestureDescription.Builder().addStroke(s).build(), null, null);
     }
 
@@ -641,18 +881,33 @@ public class YuniA11yService extends AccessibilityService {
         return dispatchGesture(new GestureDescription.Builder().addStroke(s).build(), null, null);
     }
 
+    // 点含文字的控件：优先完全匹配、只看可见的；找不到可点的父级就直接点它的位置
     public boolean clickText(String t) {
         if (t == null || t.length() == 0 || blockedNow()) return false;
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return false;
         List<AccessibilityNodeInfo> l = root.findAccessibilityNodeInfosByText(t);
         if (l == null) return false;
+        AccessibilityNodeInfo best = null;
+        int bestScore = Integer.MAX_VALUE;
         for (AccessibilityNodeInfo n : l) {
-            AccessibilityNodeInfo c = n;
-            while (c != null && !c.isClickable()) c = c.getParent();
-            if (c != null && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
+            if (!n.isVisibleToUser()) continue;
+            CharSequence tx = n.getText();
+            if (tx == null) tx = n.getContentDescription();
+            String s = tx == null ? "" : tx.toString();
+            int score = s.equals(t) ? 0 : (10 + Math.abs(s.length() - t.length()));
+            if (score < bestScore) {
+                bestScore = score;
+                best = n;
+            }
         }
-        return false;
+        if (best == null) return false;
+        AccessibilityNodeInfo c = best;
+        while (c != null && !c.isClickable()) c = c.getParent();
+        if (c != null && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
+        Rect r = new Rect();
+        best.getBoundsInScreen(r);
+        return tap(r.centerX(), r.centerY());
     }
 
     public boolean inputText(String t) {
@@ -666,10 +921,57 @@ public class YuniA11yService extends AccessibilityService {
         return f.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, b);
     }
 
+    public boolean imeEnter() {
+        if (Build.VERSION.SDK_INT < 30 || blockedNow()) return false;
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return false;
+        AccessibilityNodeInfo f = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+        if (f == null) return false;
+        return f.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
+    }
+
     public boolean globalAct(String act) {
         if ("back".equals(act)) return performGlobalAction(GLOBAL_ACTION_BACK);
         if ("home".equals(act)) return performGlobalAction(GLOBAL_ACTION_HOME);
         if ("recents".equals(act)) return performGlobalAction(GLOBAL_ACTION_RECENTS);
         return false;
+    }
+
+    // ---------- 截图（识图用，Android 11+） ----------
+    public String screenshotB64() {
+        if (Build.VERSION.SDK_INT < 30 || blockedNow()) return "";
+        final String[] out = {""};
+        final CountDownLatch latch = new CountDownLatch(1);
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(),
+                new AccessibilityService.TakeScreenshotCallback() {
+                    @Override
+                    public void onSuccess(AccessibilityService.ScreenshotResult r) {
+                        try {
+                            Bitmap hw = Bitmap.wrapHardwareBuffer(r.getHardwareBuffer(), r.getColorSpace());
+                            if (hw != null) {
+                                Bitmap sw = hw.copy(Bitmap.Config.ARGB_8888, false);
+                                int w = 640;
+                                int hh = Math.round(sw.getHeight() * (w / (float) sw.getWidth()));
+                                Bitmap sc = Bitmap.createScaledBitmap(sw, w, hh, true);
+                                ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                                sc.compress(Bitmap.CompressFormat.JPEG, 55, bo);
+                                out[0] = Base64.encodeToString(bo.toByteArray(), Base64.NO_WRAP);
+                            }
+                            r.getHardwareBuffer().close();
+                        } catch (Throwable e) {
+                        }
+                        latch.countDown();
+                    }
+
+                    @Override
+                    public void onFailure(int errorCode) {
+                        latch.countDown();
+                    }
+                });
+            latch.await(4, TimeUnit.SECONDS);
+        } catch (Throwable e) {
+        }
+        return out[0];
     }
 }

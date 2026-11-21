@@ -10,6 +10,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.Manifest;
+import android.app.NotificationManager;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
@@ -43,6 +45,7 @@ import java.util.Set;
 public class MainActivity extends Activity {
     static final String HOST = "appassets.androidplatform.net";
     static final int REQ_FILE = 1001;
+    public static MainActivity inst;
     WebView w;
     ValueCallback<Uri[]> filePathCb;
 
@@ -65,6 +68,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        inst = this;
         w = new WebView(this);
         setContentView(w);
 
@@ -152,6 +156,13 @@ public class MainActivity extends Activity {
             o.put("api", sp().getString("api_url", "").length() > 0);
             o.put("see", sp().getBoolean("opt_see", false));
             o.put("act", sp().getBoolean("opt_act", false));
+            o.put("img", sp().getBoolean("opt_img", false));
+            o.put("charName", sp().getString("char_name", ""));
+            o.put("avatar", sp().getString("char_avatar", "").length() > 0);
+            o.put("ctxLen", sp().getString("char_context", "").length());
+            NotificationManager nmg = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            o.put("notif", nmg != null && nmg.areNotificationsEnabled());
+            o.put("pro", sp().getBoolean("pro_on", false));
             return o.toString();
         }
         if ("openA11y".equals(m)) {
@@ -198,7 +209,9 @@ public class MainActivity extends Activity {
         if ("setChar".equals(m)) {
             sp().edit().putString("char_name", a.optString("name"))
                 .putString("char_avatar", a.optString("avatar"))
-                .putString("char_persona", a.optString("persona")).apply();
+                .putString("char_persona", a.optString("persona"))
+                .putString("user_name", a.optString("userName"))
+                .putString("char_context", a.optString("context")).apply();
             if (s != null) s.refreshBall();
             return "true";
         }
@@ -220,12 +233,48 @@ public class MainActivity extends Activity {
         }
         if ("setOpts".equals(m)) {
             sp().edit().putBoolean("opt_see", a.optBoolean("see"))
-                .putBoolean("opt_act", a.optBoolean("act")).apply();
+                .putBoolean("opt_act", a.optBoolean("act"))
+                .putBoolean("opt_img", a.optBoolean("img")).apply();
             return "true";
         }
         if ("clearChat".equals(m)) {
             if (s != null && s.agent != null) s.agent.clearHist();
             else sp().edit().remove("chat_hist").apply();
+            return "true";
+        }
+        if ("setProactive".equals(m)) {
+            sp().edit().putBoolean("pro_on", a.optBoolean("on"))
+                .putInt("pro_min", Math.max(5, a.optInt("minutes", 60)))
+                .putInt("pro_qs", a.optInt("qs", 23))
+                .putInt("pro_qe", a.optInt("qe", 8))
+                .putBoolean("pro_screen", a.optBoolean("screenOnly", true)).apply();
+            if (s != null) s.scheduleProactive();
+            return "{\"live\":" + (s != null) + "}";
+        }
+        if ("proactiveNow".equals(m)) {
+            if (s == null || s.agent == null) return "false";
+            s.agent.proactive(true);
+            return "true";
+        }
+        if ("drainInbox".equals(m)) {
+            String box = sp().getString("inbox", "[]");
+            sp().edit().putString("inbox", "[]").apply();
+            return box;
+        }
+        if ("askNotif".equals(m)) {
+            if (Build.VERSION.SDK_INT >= 33) {
+                requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 2001);
+            } else {
+                Intent ni = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                ni.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+                startActivity(ni);
+            }
+            return "true";
+        }
+        if ("openNotif".equals(m)) {
+            Intent ni = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+            ni.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+            startActivity(ni);
             return "true";
         }
         if ("setAuto".equals(m)) {
@@ -363,6 +412,12 @@ public class MainActivity extends Activity {
         } else {
             super.onActivityResult(req, res, data);
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (inst == this) inst = null;
+        super.onDestroy();
     }
 
     @Override
