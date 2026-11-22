@@ -11,6 +11,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.Manifest;
+import android.app.AppOpsManager;
+import android.os.Process;
 import android.app.NotificationManager;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -160,9 +162,13 @@ public class MainActivity extends Activity {
             o.put("charName", sp().getString("char_name", ""));
             o.put("avatar", sp().getString("char_avatar", "").length() > 0);
             o.put("ctxLen", sp().getString("char_context", "").length());
+            o.put("sysLen", sp().getString("char_sysmain", "").length());
             NotificationManager nmg = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             o.put("notif", nmg != null && nmg.areNotificationsEnabled());
             o.put("pro", sp().getBoolean("pro_on", false));
+            o.put("usage", hasUsage());
+            o.put("co", sp().getBoolean("co_on", false));
+            o.put("autolock", sp().getBoolean("opt_autolock", false));
             return o.toString();
         }
         if ("openA11y".equals(m)) {
@@ -211,6 +217,7 @@ public class MainActivity extends Activity {
                 .putString("char_avatar", a.optString("avatar"))
                 .putString("char_persona", a.optString("persona"))
                 .putString("user_name", a.optString("userName"))
+                .putString("char_sysmain", a.optString("sysMain"))
                 .putString("char_context", a.optString("context")).apply();
             if (s != null) s.refreshBall();
             return "true";
@@ -250,6 +257,20 @@ public class MainActivity extends Activity {
                 .putBoolean("pro_screen", a.optBoolean("screenOnly", true)).apply();
             if (s != null) s.scheduleProactive();
             return "{\"live\":" + (s != null) + "}";
+        }
+        if ("setCompanion".equals(m)) {
+            sp().edit().putBoolean("co_on", a.optBoolean("on"))
+                .putInt("co_sec", Math.max(20, a.optInt("sec", 45))).apply();
+            if (s != null) s.startCompanion();
+            return "{\"live\":" + (s != null) + "}";
+        }
+        if ("setAutoLock".equals(m)) {
+            sp().edit().putBoolean("opt_autolock", a.optBoolean("on")).apply();
+            return "true";
+        }
+        if ("openUsage".equals(m)) {
+            startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+            return "true";
         }
         if ("proactiveNow".equals(m)) {
             if (s == null || s.agent == null) return "false";
@@ -294,7 +315,9 @@ public class MainActivity extends Activity {
             if (!inGuard(pkg)) return "false";
             JSONObject lk = new JSONObject(sp().getString("locks", "{}"));
             lk.put(pkg, System.currentTimeMillis() + min * 60000L);
-            sp().edit().putString("locks", lk.toString()).apply();
+            JSONObject rs = new JSONObject(sp().getString("lock_reasons", "{}"));
+            rs.put(pkg, "你自己设置的冻结");
+            sp().edit().putString("locks", lk.toString()).putString("lock_reasons", rs.toString()).apply();
             return "true";
         }
         if ("unlockApp".equals(m)) {
@@ -358,6 +381,16 @@ public class MainActivity extends Activity {
             return JSONObject.quote(sp().getString("last_read", ""));
         }
         return "null";
+    }
+
+    boolean hasUsage() {
+        try {
+            AppOpsManager ao = (AppOpsManager) getSystemService(APP_OPS_SERVICE);
+            int mode = ao.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), getPackageName());
+            return mode == AppOpsManager.MODE_ALLOWED;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     boolean inGuard(String pkg) {

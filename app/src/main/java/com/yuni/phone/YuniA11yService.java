@@ -3,6 +3,15 @@ package com.yuni.phone;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.app.AlarmManager;
+import android.app.AppOpsManager;
+import android.app.usage.UsageStats;
+import android.app.usage.UsageStatsManager;
+import android.os.Process;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Map;
+import android.content.pm.PackageManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -91,6 +100,19 @@ public class YuniA11yService extends AccessibilityService {
     long lastKick = 0;
     String lastPkg = "";
     BroadcastReceiver tickRx;
+    String curPkg = "";
+    String rejPkg = "";
+    long curSince = 0;
+    long lastCo = 0;
+    final Runnable coRun = new Runnable() {
+        public void run() {
+            try {
+                coTick();
+            } catch (Exception e) {
+            }
+            if (sp().getBoolean("co_on", false)) h.postDelayed(this, 5000);
+        }
+    };
     static final String ACT_TICK = "com.yuni.phone.PROACTIVE_TICK";
     String lastLine = "";
     final Runnable hideBubbleRun = new Runnable() {
@@ -134,12 +156,14 @@ public class YuniA11yService extends AccessibilityService {
         SharedPreferences p = sp();
         if (p.getBoolean("ball_on", false) && p.getBoolean("auto", true)) showBall();
         scheduleProactive();
+        startCompanion();
     }
 
     @Override
     public boolean onUnbind(Intent i) {
         if (agent != null) agent.stop();
         h.removeCallbacks(hideBubbleRun);
+        h.removeCallbacks(coRun);
         closePanel();
         removeBubble();
         removeBall();
@@ -160,6 +184,19 @@ public class YuniA11yService extends AccessibilityService {
         String pkg = cs.toString();
         if (pkg.equals(getPackageName()) || pkg.equals("com.android.systemui")) return;
         lastPkg = pkg;
+        if (!pkg.equals(curPkg) && !pkg.equals(rejPkg)) {
+            boolean isApp = false;
+            try {
+                isApp = getPackageManager().getLaunchIntentForPackage(pkg) != null;
+            } catch (Exception ex) {
+            }
+            if (isApp) {
+                curPkg = pkg;
+                curSince = System.currentTimeMillis();
+            } else {
+                rejPkg = pkg;
+            }
+        }
         checkLock(pkg);
     }
 
@@ -181,7 +218,12 @@ public class YuniA11yService extends AccessibilityService {
         performGlobalAction(GLOBAL_ACTION_HOME);
         long mins = (until - now + 59999) / 60000;
         String nm = sp().getString("char_name", "char");
-        say("【" + nm + "】把这个 APP 锁住啦，还剩 " + mins + " 分钟", 4000);
+        String reason = "";
+        try {
+            reason = new JSONObject(sp().getString("lock_reasons", "{}")).optString(pkg, "");
+        } catch (Exception e) {
+        }
+        say("【" + nm + "】锁了这个 APP" + (reason.length() > 0 ? "：" + reason : "") + "（还剩 " + mins + " 分钟）", 5000);
     }
 
     public void relock() {
@@ -308,6 +350,108 @@ public class YuniA11yService extends AccessibilityService {
             nm.notify((int) (System.currentTimeMillis() / 1000L), b.build());
         } catch (Exception e) {
         }
+    }
+
+    // ---------- 使用时长 ----------
+    public boolean hasUsageAccess() {
+        try {
+            AppOpsManager ao = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
+            int mode = ao.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), getPackageName());
+            return mode == AppOpsManager.MODE_ALLOWED;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    static String fmtMin(long min) {
+        if (min < 60) return min + " 分钟";
+        return (min / 60) + " 小时" + (min % 60 > 0 ? " " + (min % 60) + " 分" : "");
+    }
+
+    public String currentAppName() {
+        try {
+            PackageManager pm = getPackageManager();
+            return String.valueOf(pm.getApplicationLabel(pm.getApplicationInfo(curPkg, 0)));
+        } catch (Exception e) {
+            return curPkg;
+        }
+    }
+
+    public long currentAppMinutes() {
+        if (curSince == 0) return 0;
+        return Math.max(0, (System.currentTimeMillis() - curSince) / 60000L);
+    }
+
+    public String usageSummary() {
+        if (!hasUsageAccess()) return "";
+        try {
+            UsageStatsManager um = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
+            Calendar c = Calendar.getInstance();
+            c.set(Calendar.HOUR_OF_DAY, 0);
+            c.set(Calendar.MINUTE, 0);
+            c.set(Calendar.SECOND, 0);
+            c.set(Calendar.MILLISECOND, 0);
+            Map<String, UsageStats> m = um.queryAndAggregateUsageStats(c.getTimeInMillis(), System.currentTimeMillis());
+            ArrayList<UsageStats> list = new ArrayList<UsageStats>();
+            PackageManager pm = getPackageManager();
+            long total = 0;
+            for (UsageStats u : m.values()) {
+                if (u.getTotalTimeInForeground() < 60000L) continue;
+                String p = u.getPackageName();
+                if (p.equals(getPackageName()) || pm.getLaunchIntentForPackage(p) == null) continue;
+                list.add(u);
+                total += u.getTotalTimeInForeground();
+            }
+            Collections.sort(list, new Comparator<UsageStats>() {
+                public int compare(UsageStats a, UsageStats b) {
+                    return Long.compare(b.getTotalTimeInForeground(), a.getTotalTimeInForeground());
+                }
+            });
+            StringBuilder sb = new StringBuilder("【对方的手机使用情况（真实数据，今天截至现在）】");
+            sb.append("共约 ").append(fmtMin(total / 60000L)).append("：");
+            int n = 0;
+            for (UsageStats u : list) {
+                if (n++ >= 8) break;
+                String nm;
+                try {
+                    nm = String.valueOf(pm.getApplicationLabel(pm.getApplicationInfo(u.getPackageName(), 0)));
+                } catch (Exception e) {
+                    nm = u.getPackageName();
+                }
+                if (n > 1) sb.append("、");
+                sb.append(nm).append(" ").append(fmtMin(u.getTotalTimeInForeground() / 60000L));
+            }
+            if (curPkg.length() > 0) {
+                sb.append("。此刻在用：").append(currentAppName()).append("，已连续约 ").append(currentAppMinutes()).append(" 分钟");
+            }
+            long lastUser = sp().getLong("last_user_ts", 0);
+            if (lastUser > 0) {
+                sb.append("。对方上次对你说话是 ").append(fmtMin((System.currentTimeMillis() - lastUser) / 60000L)).append("前");
+            }
+            return sb.append("。").toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    // ---------- 陪玩 ----------
+    public void startCompanion() {
+        h.removeCallbacks(coRun);
+        if (sp().getBoolean("co_on", false)) h.postDelayed(coRun, 5000);
+    }
+
+    public void markCo() {
+        lastCo = System.currentTimeMillis();
+    }
+
+    void coTick() {
+        if (agent == null || agent.isRunning() || panel != null) return;
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm != null && !pm.isInteractive()) return;
+        if (lastPkg.length() == 0 || isBlocked(lastPkg) || lastPkg.equals(getPackageName())) return;
+        int sec = Math.max(20, sp().getInt("co_sec", 45));
+        if (System.currentTimeMillis() - lastCo < sec * 1000L) return;
+        agent.companion();
     }
 
     // ---------- 通用样式 ----------
@@ -496,7 +640,7 @@ public class YuniA11yService extends AccessibilityService {
     }
 
     void onBallTap() {
-        if (agent != null && agent.isRunning()) {
+        if (agent != null && agent.isBusyUser()) {
             agent.stop();
             subtitle("好，我停下了。");
             subtitleEnd(2500);
@@ -701,7 +845,14 @@ public class YuniA11yService extends AccessibilityService {
                         try {
                             Object o = new JSONTokener(v).nextValue();
                             if (o instanceof String && ((String) o).length() > 0) {
-                                sp().edit().putString("char_context", (String) o).apply();
+                                String raw = (String) o;
+                                try {
+                                    JSONObject j = new JSONObject(raw);
+                                    sp().edit().putString("char_sysmain", j.optString("sys"))
+                                        .putString("char_context", j.optString("ctx")).apply();
+                                } catch (Exception pe) {
+                                    sp().edit().putString("char_context", raw).apply();
+                                }
                             }
                         } catch (Exception e) {
                         }
