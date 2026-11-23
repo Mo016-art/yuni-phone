@@ -389,6 +389,9 @@ public class YuniAgent {
         boolean act = sp.getBoolean("opt_act", false);
         boolean imgOn = sp.getBoolean("opt_img", false);
         int max = sp.getInt("opt_steps", 20);
+        final boolean auto = text.matches("(?s).*(自己刷|你来刷|陪我刷|一直刷|随便刷|刷一会|接着刷|继续刷|自己玩|你来玩|自己看|随便看).*");
+        if (auto) max = 60;
+        final boolean taskLike = auto || text.matches("(?s).*(打开|点|搜|找|刷|滑|翻|播放|暂停|关注|点赞|收藏|评论|返回|回到|关闭|切换|锁|解锁|帮我|替我|给我|去).*");
         String url = sp.getString("api_url", "");
         String key = sp.getString("api_key", "");
         String model = sp.getString("api_model", "");
@@ -406,9 +409,10 @@ public class YuniAgent {
             screen = screenNow();
             if (imgOn) img = svc.screenshotB64();
         }
-        addHist("user", text, screen, img);
+        addHist("user", auto ? text + "\n[系统提示] 自主模式：你自己操作，边看边划，每看一会儿就划到下一个，每一步说一句真实的反应；除非我明确说了，别点赞、关注、评论、收藏；我点悬浮球你就停。" : text, screen, img);
         boolean ended = false;
         boolean prevAct = false;
+        boolean verifyPending = false;
         int nudges = 0;
         for (int step = 0; step < max && !stop; step++) {
             String reply = callLLM(proto, url, key, model, buildSystem(see, act), act);
@@ -424,12 +428,14 @@ public class YuniAgent {
             addHist("assistant", reply, "", "");
             List<JSONObject> acts = parseActions(reply);
             boolean done = reply.contains("@@DONE");
+            boolean wasVerify = verifyPending;
+            verifyPending = false;
             if (acts.isEmpty()) {
-                if (act && !done && prevAct && nudges < 2) {
+                if (act && !done && !wasVerify && (prevAct || taskLike) && nudges < (auto ? 8 : 3)) {
                     nudges++;
                     screen = screenNow();
                     img = imgOn ? svc.screenshotB64() : "";
-                    addHist("user", "[系统提示] 任务还没完成的话，请直接输出下一步动作，不要停下来等我；已经完成就用一句话说结果，并在最后输出 @@DONE。", screen, img);
+                    addHist("user", "[系统提示] 每一轮必须以动作行（@@ACTION）或 @@DONE 收尾。任务「" + clip(text, 60) + "」还没完成就直接输出下一步动作，别停下来等我，也别问我要不要继续；已经完成就用一句话说结果并输出 @@DONE。", screen, img);
                     continue;
                 }
                 ended = true;
@@ -444,7 +450,7 @@ public class YuniAgent {
             StringBuilder desc = new StringBuilder();
             int n = 0;
             for (JSONObject o : acts) {
-                if (stop || n >= 4) break;
+                if (stop || n >= 5) break;
                 String[] r = exec(o);
                 if ("ask".equals(o.optString("a")) && r[1].equals("ok")) svc.notifyRequest(shown, lastAskId);
                 n++;
@@ -458,19 +464,38 @@ public class YuniAgent {
             }
             prevAct = true;
             if (stop) break;
-            if (done) {
-                ended = true;
-                break;
-            }
+            if (auto && !sleepWatch(5000 + new java.util.Random().nextInt(5000))) break;
             waitStable();
             screen = screenNow();
             img = imgOn ? svc.screenshotB64() : "";
-            addHist("user", "[执行结果] " + res, screen, img);
+            String follow = "[执行结果] " + res + "\n[当前任务] " + clip(text, 120);
+            if (done) {
+                verifyPending = true;
+                follow += "\n[系统提示] 如果任务已经完成，就只说结果并输出 @@DONE（不要再输出动作）；没完成就继续输出下一步动作。";
+            } else {
+                follow += "（没做完就继续输出下一步动作）";
+            }
+            addHist("user", follow, screen, img);
         }
         if (!ended && !stop) {
             svc.subtitle("（步数用完了，我先停在这儿，要继续你再说）");
         }
         svc.subtitleEnd(7000);
+    }
+
+    // 自主模式：边看边等（可随时被叫停）
+    boolean sleepWatch(int ms) {
+        int t = 0;
+        while (t < ms) {
+            if (stop) return false;
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                return false;
+            }
+            t += 500;
+        }
+        return !stop;
     }
 
     // 等屏幕稳定（页面加载、动画结束）再读
@@ -536,13 +561,14 @@ public class YuniAgent {
             if (sp.getBoolean("opt_ask", true)) s.append("- ask {pkg,limit,days,reason}：向对方申请管控某个应用（每天最多 limit 分钟，管 days 天），对方会收到同意或拒绝\n");
             s.append("- wait {ms}\n");
             s.append("做事规则：\n");
-            s.append("1. 对方一句话交代的任务要一路做完，不要做一步就停下来等对方。每一轮写 1~3 个动作（会按顺序执行，不需要中间回看屏幕的放在同一轮，比如：点搜索框 → input → enter）。需要看结果再决定下一步时，这一轮就只写到那一步。整件事做完，用一句话说结果，并在最后输出 @@DONE。\n");
+            s.append("1. 对方一句话交代的任务要自己一路做完：不要做一步就停下来等对方，也别问「要我继续吗」。每一轮写 1~5 个动作（按顺序执行，不需要中间回看屏幕的放在同一轮，比如：点搜索框 → input → enter → 点结果）。每一轮都必须以动作行（@@ACTION）或 @@DONE 收尾；需要看了结果再决定下一步时，这一轮只写到那一步。整件事做完，用一句话说结果，并在最后输出 @@DONE。\n");
             s.append("2. 做事时的话保持你自己的语气，一句就够，别写成汇报，也别用助手腔。\n");
             s.append("3. 别点错：点之前对照屏幕核对文字；带 [已选中] 的标签就是当前页，要换页才点别的；搜索结果页顶部有分类标签，要什么类型就点对应标签，别点错相邻的；看视频、刷视频时不要点画面中间（会暂停或继续播放），想暂停才点。\n");
             s.append("4. 点完下一轮看新屏幕确认结果，再下结论；看不出状态就说看不出，不要凭空断言。\n");
             s.append("5. 看不清、拿不准，或涉及付款、转账、密码、验证码、删除、给别人发消息，先问对方，等对方同意再做。\n");
             s.append("6. 锁 APP 由你自己决定，必须带 reason，理由要真实，只能是：对方连续用某个管控应用太久（看【对方的手机使用情况】）；对方很久没找你，却一直在刷手机。锁多久你定，别超过 60 分钟。你说的话里要当面讲清楚为什么锁；对方生气或求饶时你可以心软，用 unlock 解开。\n");
-            if (sp.getBoolean("opt_ask", true)) s.append("7. 想长期管对方的某个应用（比如游戏、刷视频的），不能直接动手，要先用 ask 申请，理由要真实（看【对方的手机使用情况】）；对方同意后才算数，被拒绝就别再纠缠。\n");
+            s.append("7. 遇到弹窗、广告、权限框，先关掉再继续；点了没反应就换种方式（tap_text 换成 tap 坐标，或先滑动找一下），同一个动作别重复超过两次。\n");
+            if (sp.getBoolean("opt_ask", true)) s.append("8. 想长期管对方的某个应用（比如游戏、刷视频的），不能直接动手，要先用 ask 申请，理由要真实（看【对方的手机使用情况】）；对方同意后才算数，被拒绝就别再纠缠。\n");
             s.append("可打开的应用（名称=包名）：").append(appsList()).append("\n");
             String g = guardList();
             if (g.length() > 0) s.append("被对方交给你管控、你可以锁的应用：").append(g).append("\n");
@@ -816,7 +842,7 @@ public class YuniAgent {
         int last = snap.size() - 1;
         boolean gem = "gemini".equals(proto);
         double temp = actMode ? 0.75 : 0.85;
-        int maxTok = actMode ? 400 : 350;
+        int maxTok = actMode ? 550 : 350;
         String b = base.trim();
         while (b.endsWith("/")) b = b.substring(0, b.length() - 1);
         String urlStr;

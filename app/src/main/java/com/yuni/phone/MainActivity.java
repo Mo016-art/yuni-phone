@@ -21,7 +21,9 @@ import java.io.ByteArrayOutputStream;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.util.Base64;
+import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
+import java.util.ArrayList;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -47,6 +49,10 @@ import java.util.Set;
 public class MainActivity extends Activity {
     static final String HOST = "appassets.androidplatform.net";
     static final int REQ_FILE = 1001;
+    static final int REQ_CAM = 1002;
+    Uri camUri;
+    WebChromeClient.FileChooserParams pendingParams;
+    PermissionRequest pendingPerm;
     public static MainActivity inst;
     WebView w;
     ValueCallback<Uri[]> filePathCb;
@@ -102,6 +108,18 @@ public class MainActivity extends Activity {
                                              FileChooserParams p) {
                 if (filePathCb != null) filePathCb.onReceiveValue(null);
                 filePathCb = cb;
+                boolean wantImage = false;
+                String[] types = p.getAcceptTypes();
+                if (types != null) {
+                    for (String t : types) {
+                        if (t != null && t.startsWith("image")) wantImage = true;
+                    }
+                }
+                // 「拍摄」：页面带 capture 要求时，直接调相机
+                if (p.isCaptureEnabled() && wantImage && Build.VERSION.SDK_INT >= 29) {
+                    launchCamera(p);
+                    return true;
+                }
                 try {
                     startActivityForResult(p.createIntent(), REQ_FILE);
                 } catch (Exception e) {
@@ -109,6 +127,37 @@ public class MainActivity extends Activity {
                     return false;
                 }
                 return true;
+            }
+
+            // 页面里的摄像头、麦克风（视频通话、语音消息）：只给本应用自己的页面
+            @Override
+            public void onPermissionRequest(final PermissionRequest request) {
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        Uri o = request.getOrigin();
+                        if (o == null || !HOST.equals(o.getHost())) {
+                            request.deny();
+                            return;
+                        }
+                        ArrayList<String> need = new ArrayList<String>();
+                        for (String r : request.getResources()) {
+                            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r)
+                                && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                                need.add(Manifest.permission.CAMERA);
+                            }
+                            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)
+                                && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                                need.add(Manifest.permission.RECORD_AUDIO);
+                            }
+                        }
+                        if (need.isEmpty()) {
+                            request.grant(request.getResources());
+                        } else {
+                            pendingPerm = request;
+                            requestPermissions(need.toArray(new String[0]), 3002);
+                        }
+                    }
+                });
             }
         });
 
@@ -480,9 +529,78 @@ public class MainActivity extends Activity {
         }
     }
 
+    void launchCamera(WebChromeClient.FileChooserParams p) {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            pendingParams = p;
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, 3001);
+            return;
+        }
+        try {
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.Images.Media.DISPLAY_NAME, "yuni_" + System.currentTimeMillis() + ".jpg");
+            cv.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+            cv.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/YuniPhone");
+            camUri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+            Intent it = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            it.putExtra(MediaStore.EXTRA_OUTPUT, camUri);
+            startActivityForResult(it, REQ_CAM);
+        } catch (Exception e) {
+            // 相机起不来就退回相册选图
+            try {
+                startActivityForResult(p.createIntent(), REQ_FILE);
+            } catch (Exception e2) {
+                if (filePathCb != null) filePathCb.onReceiveValue(null);
+                filePathCb = null;
+            }
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int req, String[] perms, int[] results) {
+        boolean ok = results.length > 0;
+        for (int r : results) {
+            if (r != PackageManager.PERMISSION_GRANTED) ok = false;
+        }
+        if (req == 3001 && pendingParams != null) {
+            WebChromeClient.FileChooserParams p = pendingParams;
+            pendingParams = null;
+            if (ok) {
+                launchCamera(p);
+            } else {
+                try {
+                    startActivityForResult(p.createIntent(), REQ_FILE);
+                } catch (Exception e) {
+                    if (filePathCb != null) filePathCb.onReceiveValue(null);
+                    filePathCb = null;
+                }
+            }
+        } else if (req == 3002 && pendingPerm != null) {
+            PermissionRequest pr = pendingPerm;
+            pendingPerm = null;
+            if (ok) pr.grant(pr.getResources());
+            else pr.deny();
+        } else {
+            super.onRequestPermissionsResult(req, perms, results);
+        }
+    }
+
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
-        if (req == REQ_FILE && filePathCb != null) {
+        if (req == REQ_CAM && filePathCb != null) {
+            if (res == RESULT_OK && camUri != null) {
+                filePathCb.onReceiveValue(new Uri[]{camUri});
+            } else {
+                filePathCb.onReceiveValue(null);
+                if (camUri != null) {
+                    try {
+                        getContentResolver().delete(camUri, null, null);
+                    } catch (Exception e) {
+                    }
+                }
+            }
+            filePathCb = null;
+            camUri = null;
+        } else if (req == REQ_FILE && filePathCb != null) {
             filePathCb.onReceiveValue(
                 WebChromeClient.FileChooserParams.parseResult(res, data));
             filePathCb = null;
