@@ -163,12 +163,14 @@ public class MainActivity extends Activity {
             o.put("avatar", sp().getString("char_avatar", "").length() > 0);
             o.put("ctxLen", sp().getString("char_context", "").length());
             o.put("sysLen", sp().getString("char_sysmain", "").length());
+            o.put("err", sp().getString("last_err", ""));
             NotificationManager nmg = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             o.put("notif", nmg != null && nmg.areNotificationsEnabled());
             o.put("pro", sp().getBoolean("pro_on", false));
             o.put("usage", hasUsage());
             o.put("co", sp().getBoolean("co_on", false));
             o.put("autolock", sp().getBoolean("opt_autolock", false));
+            o.put("ask", sp().getBoolean("opt_ask", true));
             return o.toString();
         }
         if ("openA11y".equals(m)) {
@@ -218,6 +220,7 @@ public class MainActivity extends Activity {
                 .putString("char_persona", a.optString("persona"))
                 .putString("user_name", a.optString("userName"))
                 .putString("char_sysmain", a.optString("sysMain"))
+                .putString("char_ban", a.optString("ban", "[]"))
                 .putString("char_context", a.optString("context")).apply();
             if (s != null) s.refreshBall();
             return "true";
@@ -298,6 +301,55 @@ public class MainActivity extends Activity {
             startActivity(ni);
             return "true";
         }
+        if ("clearErr".equals(m)) {
+            sp().edit().remove("last_err").apply();
+            return "true";
+        }
+        if ("setAsk".equals(m)) {
+            sp().edit().putBoolean("opt_ask", a.optBoolean("on", true)).apply();
+            return "true";
+        }
+        if ("getReqs".equals(m)) {
+            JSONObject out = new JSONObject();
+            out.put("pending", YuniRules.pending(this));
+            out.put("charName", sp().getString("char_name", "char"));
+            JSONArray ra = new JSONArray();
+            JSONObject rl = YuniRules.rules(this);
+            long now = System.currentTimeMillis();
+            Iterator<String> it = rl.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                JSONObject r = rl.optJSONObject(k);
+                if (r == null) continue;
+                JSONObject o = new JSONObject();
+                o.put("pkg", k);
+                o.put("name", r.optString("name"));
+                o.put("limit", r.optInt("limit"));
+                o.put("daysLeft", Math.max(0, (r.optLong("until") - now) / 86400000L));
+                ra.put(o);
+            }
+            out.put("rules", ra);
+            return out.toString();
+        }
+        if ("answerReq".equals(m)) {
+            if (s != null) {
+                s.handleReq(a.optString("id"), a.optBoolean("ok"));
+            } else {
+                YuniRules.answer(this, a.optString("id"), a.optBoolean("ok"));
+            }
+            return "true";
+        }
+        if ("revokeRule".equals(m)) {
+            YuniRules.revoke(this, a.optString("pkg"));
+            return "true";
+        }
+        if ("cfgSave".equals(m)) {
+            sp().edit().putString("ui_cfg", a.optString("json")).apply();
+            return "true";
+        }
+        if ("cfgLoad".equals(m)) {
+            return JSONObject.quote(sp().getString("ui_cfg", ""));
+        }
         if ("setAuto".equals(m)) {
             sp().edit().putBoolean("auto", a.optBoolean("on")).apply();
             return "true";
@@ -307,27 +359,16 @@ public class MainActivity extends Activity {
             sp().edit().putString("guard", arr == null ? "[]" : arr.toString()).apply();
             return "true";
         }
-        if ("lockApp".equals(m)) {
-            String pkg = a.optString("pkg");
-            int min = a.optInt("minutes", 30);
-            if (min < 1) min = 1;
-            if (min > 10080) min = 10080;
-            if (!inGuard(pkg)) return "false";
-            JSONObject lk = new JSONObject(sp().getString("locks", "{}"));
-            lk.put(pkg, System.currentTimeMillis() + min * 60000L);
-            JSONObject rs = new JSONObject(sp().getString("lock_reasons", "{}"));
-            rs.put(pkg, "你自己设置的冻结");
-            sp().edit().putString("locks", lk.toString()).putString("lock_reasons", rs.toString()).apply();
-            return "true";
-        }
         if ("unlockApp".equals(m)) {
             JSONObject lk = new JSONObject(sp().getString("locks", "{}"));
             lk.remove(a.optString("pkg"));
             sp().edit().putString("locks", lk.toString()).apply();
+            YuniRules.snooze(this, a.optString("pkg"));
             return "true";
         }
         if ("getLocks".equals(m)) {
             JSONObject lk = new JSONObject(sp().getString("locks", "{}"));
+            JSONObject rs = new JSONObject(sp().getString("lock_reasons", "{}"));
             JSONObject out = new JSONObject();
             JSONObject keep = new JSONObject();
             long now = System.currentTimeMillis();
@@ -337,7 +378,10 @@ public class MainActivity extends Activity {
                 long until = lk.optLong(k, 0);
                 if (until > now) {
                     keep.put(k, until);
-                    out.put(k, (until - now + 59999) / 60000);
+                    JSONObject lo = new JSONObject();
+                    lo.put("m", (until - now + 59999) / 60000);
+                    lo.put("r", rs.optString(k, ""));
+                    out.put(k, lo);
                 }
             }
             sp().edit().putString("locks", keep.toString()).apply();

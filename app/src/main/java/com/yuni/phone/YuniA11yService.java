@@ -114,6 +114,17 @@ public class YuniA11yService extends AccessibilityService {
         }
     };
     static final String ACT_TICK = "com.yuni.phone.PROACTIVE_TICK";
+    static final String ACT_REQ = "com.yuni.phone.REQ_ANSWER";
+    BroadcastReceiver reqRx;
+    final Runnable enfRun = new Runnable() {
+        public void run() {
+            try {
+                enforceTick();
+            } catch (Exception e) {
+            }
+            h.postDelayed(this, 30000);
+        }
+    };
     String lastLine = "";
     final Runnable hideBubbleRun = new Runnable() {
         public void run() {
@@ -157,6 +168,9 @@ public class YuniA11yService extends AccessibilityService {
         if (p.getBoolean("ball_on", false) && p.getBoolean("auto", true)) showBall();
         scheduleProactive();
         startCompanion();
+        registerReqRx();
+        h.removeCallbacks(enfRun);
+        h.postDelayed(enfRun, 30000);
     }
 
     @Override
@@ -164,6 +178,14 @@ public class YuniA11yService extends AccessibilityService {
         if (agent != null) agent.stop();
         h.removeCallbacks(hideBubbleRun);
         h.removeCallbacks(coRun);
+        h.removeCallbacks(enfRun);
+        if (reqRx != null) {
+            try {
+                unregisterReceiver(reqRx);
+            } catch (Exception e) {
+            }
+            reqRx = null;
+        }
         closePanel();
         removeBubble();
         removeBall();
@@ -350,6 +372,141 @@ public class YuniA11yService extends AccessibilityService {
             nm.notify((int) (System.currentTimeMillis() / 1000L), b.build());
         } catch (Exception e) {
         }
+    }
+
+    // ---------- 管控申请：通知上的同意 / 拒绝 ----------
+    void registerReqRx() {
+        if (reqRx != null) return;
+        reqRx = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                handleReq(i.getStringExtra("id"), i.getBooleanExtra("ok", false));
+            }
+        };
+        IntentFilter f = new IntentFilter(ACT_REQ);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(reqRx, f, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(reqRx, f);
+        }
+    }
+
+    PendingIntent reqPi(String id, boolean ok) {
+        Intent it = new Intent(ACT_REQ).setPackage(getPackageName()).putExtra("id", id).putExtra("ok", ok);
+        return PendingIntent.getBroadcast(this, (Math.abs(id.hashCode()) % 100000) * 2 + (ok ? 1 : 0), it,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    public void handleReq(String id, boolean ok) {
+        JSONObject hit = YuniRules.answer(this, id, ok);
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null && id != null) nm.cancel(Math.abs(id.hashCode()));
+        } catch (Exception e) {
+        }
+        if (hit == null) return;
+        String app = hit.optString("name");
+        if (agent != null) {
+            agent.note(ok
+                ? "对方同意了你对「" + app + "」的管控申请：每天最多 " + hit.optInt("limit") + " 分钟，管 " + hit.optInt("days") + " 天。"
+                : "对方拒绝了你对「" + app + "」的管控申请，3 天内别再提这个应用。");
+        }
+        say(ok ? "好，" + app + " 我来管" : "知道了，不管了", 3000);
+    }
+
+    // 带「同意 / 拒绝」按钮的通知；没开通知权限时，仍可在设置页处理
+    public void notifyRequest(String body, String id) {
+        try {
+            JSONArray pd = YuniRules.pending(this);
+            JSONObject q = null;
+            for (int i = 0; i < pd.length(); i++) {
+                if (id.equals(pd.getJSONObject(i).optString("id"))) q = pd.getJSONObject(i);
+            }
+            if (q == null) return;
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null || !nm.areNotificationsEnabled()) return;
+            if (Build.VERSION.SDK_INT >= 26) {
+                nm.createNotificationChannel(new NotificationChannel("char_msg", "char 的消息",
+                    NotificationManager.IMPORTANCE_HIGH));
+            }
+            String sum = sp().getString("char_name", "char") + " 想管一下你的「" + q.optString("name")
+                + "」：每天最多 " + q.optInt("limit") + " 分钟，持续 " + q.optInt("days") + " 天。理由：" + q.optString("reason");
+            String text = (body != null && body.length() > 0) ? body + "\n\n" + sum : sum;
+            Intent open = new Intent(this, MainActivity.class);
+            open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            PendingIntent pi = PendingIntent.getActivity(this, 2, open,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(this, "char_msg") : new Notification.Builder(this);
+            b.setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setContentTitle("管控申请")
+                .setContentText(sum)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
+                .setLargeIcon(avatarBitmap(dp(48) * 2))
+                .setContentIntent(pi)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "拒绝", reqPi(id, false))
+                .addAction(android.R.drawable.ic_menu_send, "同意", reqPi(id, true))
+                .setAutoCancel(true);
+            if (Build.VERSION.SDK_INT < 26) b.setPriority(Notification.PRIORITY_HIGH);
+            nm.notify(Math.abs(id.hashCode()), b.build());
+        } catch (Exception e) {
+        }
+    }
+
+    // char 主动说的话 + 管控申请：字幕、收件箱、带按钮的通知
+    public void deliverRequest(final String msg, final String id) {
+        addInbox(msg);
+        h.post(new Runnable() {
+            public void run() {
+                if (ball != null) say(msg, 12000);
+                notifyRequest(msg, id);
+            }
+        });
+    }
+
+    // ---------- 已同意的管控：到每天上限就锁 ----------
+    long usageToday(String pkg) {
+        if (!hasUsageAccess()) return 0;
+        try {
+            UsageStatsManager um = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
+            Calendar c = Calendar.getInstance();
+            c.set(Calendar.HOUR_OF_DAY, 0);
+            c.set(Calendar.MINUTE, 0);
+            c.set(Calendar.SECOND, 0);
+            c.set(Calendar.MILLISECOND, 0);
+            Map<String, UsageStats> m = um.queryAndAggregateUsageStats(c.getTimeInMillis(), System.currentTimeMillis());
+            UsageStats u = m.get(pkg);
+            return u == null ? 0 : u.getTotalTimeInForeground();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    void enforceTick() {
+        if (curPkg.length() == 0) return;
+        JSONObject rules = YuniRules.rules(this);
+        if (rules.length() == 0) return;
+        JSONObject r = rules.optJSONObject(curPkg);
+        if (r == null) return;
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm != null && !pm.isInteractive()) return;
+        YuniRules.addOwnUse(this, curPkg, 30000L);
+        long now = System.currentTimeMillis();
+        if (now < r.optLong("snooze", 0)) return;
+        long limMs = r.optInt("limit", 60) * 60000L;
+        long used = Math.max(usageToday(curPkg), YuniRules.ownUse(this, curPkg));
+        if (used < limMs) return;
+        try {
+            JSONObject lk = new JSONObject(sp().getString("locks", "{}"));
+            if (lk.optLong(curPkg, 0) > now) return;
+            lk.put(curPkg, now + 60 * 60000L);
+            JSONObject rs = new JSONObject(sp().getString("lock_reasons", "{}"));
+            rs.put(curPkg, "你同意过每天最多 " + r.optInt("limit", 60) + " 分钟，今天已经到了");
+            sp().edit().putString("locks", lk.toString()).putString("lock_reasons", rs.toString()).apply();
+        } catch (Exception e) {
+            return;
+        }
+        checkLock(curPkg);
     }
 
     // ---------- 使用时长 ----------
@@ -899,6 +1056,7 @@ public class YuniA11yService extends AccessibilityService {
                 if (bubble == null) createBubble();
                 if (bubble != null) {
                     String t = text == null ? "" : text;
+                    if (t.trim().length() == 0) t = "…";
                     if (t.length() > 260) t = "…" + t.substring(t.length() - 260);
                     bubble.setText(t);
                 }

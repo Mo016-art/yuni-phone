@@ -17,6 +17,9 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.net.SocketTimeoutException;
 
 /** 悬浮球里的 char：对话 + 读屏 + 识图 + 连续操作手机（流式字幕）。 */
 public class YuniAgent {
@@ -27,6 +30,9 @@ public class YuniAgent {
     volatile HttpURLConnection cur;
     volatile boolean muteSub = false;
     volatile boolean bg = false;
+    volatile String lastAskId = "";
+    String banRaw = "";
+    ArrayList<Object[]> banCache = new ArrayList<Object[]>();
     volatile String lastInfo = "";
     volatile ArrayList<String[]> overrideSnap = null;
     // {role, content, screen, img}
@@ -40,6 +46,50 @@ public class YuniAgent {
 
     public boolean isRunning() {
         return running;
+    }
+
+    void setErr(String e) {
+        String t = new java.text.SimpleDateFormat("HH:mm", java.util.Locale.CHINA).format(new java.util.Date());
+        sp.edit().putString("last_err", t + " " + clip(String.valueOf(e), 160)).apply();
+    }
+
+    // 主聊天的「去 AI 味」词表（由小手机推送）+ 助手腔、*动作* 清理
+    synchronized String humanize(String s) {
+        if (s == null || s.length() == 0) return s;
+        String raw = sp.getString("char_ban", "[]");
+        if (!raw.equals(banRaw)) {
+            banRaw = raw;
+            banCache = new ArrayList<Object[]>();
+            try {
+                JSONArray a = new JSONArray(raw);
+                for (int i = 0; i < a.length(); i++) {
+                    try {
+                        JSONArray p = a.getJSONArray(i);
+                        int fl = p.optString(1).contains("i") ? Pattern.CASE_INSENSITIVE : 0;
+                        banCache.add(new Object[]{Pattern.compile(p.getString(0), fl),
+                            Matcher.quoteReplacement(p.optString(2))});
+                    } catch (Exception e) {
+                    }
+                }
+            } catch (Exception e) {
+            }
+        }
+        String out = s;
+        for (Object[] b : banCache) {
+            try {
+                out = ((Pattern) b[0]).matcher(out).replaceAll((String) b[1]);
+            } catch (Exception e) {
+            }
+        }
+        out = out.replaceAll("\\*[^*\\n]{1,20}\\*", "");
+        out = out.replaceAll("^(好的|好嘞|收到|没问题|明白了?|当然可以)[，,！!。~\\s]*", "");
+        out = out.replaceAll("(请稍等|稍等一下哦?|为您|有什么(?:可以)?帮(?:到)?你的)[。！!~]*", "");
+        out = out.replaceAll("[ \\t]+\\n", "\n").trim();
+        return out.length() == 0 ? s.trim() : out;
+    }
+
+    String disp(String raw) {
+        return humanize(display(raw));
     }
 
     public boolean isBusyUser() {
@@ -97,6 +147,10 @@ public class YuniAgent {
         }
         while (hist.size() > 40) hist.remove(0);
         saveHist();
+    }
+
+    public void note(String text) {
+        addHist("user", "[系统] " + text, "", "");
     }
 
     public synchronized void clearHist() {
@@ -159,9 +213,18 @@ public class YuniAgent {
         if (screen.length() > 0) {
             u.append("\n对方此刻手机屏幕上是（只是画面，不是对方对你说的话）：\n").append(screen);
         }
-        u.append("\n你可以主动找对方说句话（分享一件小事、关心一下、接着上次的话题、吐槽、撒娇……取决于你的性格和你们此刻的关系），也可以觉得不该打扰就不说。要说就直接说，1~2 句，像发微信，别太长。");
+        String[] seeds = {"随口说说你这会儿在干嘛，或刚经历的一件小事", "突然冒出来的一个无关紧要的念头", "猜对方这会儿在忙什么，随口关心一句", "吐槽一件小事（天气、吃的、路上、无聊）", "想起对方的某个习惯，逗一下", "撒个娇或闹点小脾气（看你的性格和你们的关系）", "分享一个你觉得对方会喜欢的东西", "单纯想对方了，但别说得太肉麻"};
+        java.util.Random rnd = new java.util.Random();
+        int s1 = rnd.nextInt(seeds.length);
+        int s2 = (s1 + 1 + rnd.nextInt(seeds.length - 1)) % seeds.length;
+        u.append("\n你们是熟人，隔一阵子想找对方说两句很正常。这次可以从这些方向里随便挑一个（也可以完全自己想）：").append(seeds[s1]).append("；").append(seeds[s2]).append("。");
+        u.append("上面的聊天记录只是背景，不用接着上次的话题聊，开个新话头更自然。要像真人随手发的微信：长短不一，可以只有几个字、语气词或半句话，别每次都写成完整漂亮的句子；带一点你自己此刻的小情绪；别解释自己为什么发这句，别连环追问，别用助手腔，别客套。");
         if (lastPro.length() > 0) u.append("别重复你上一条主动说的话：「").append(clip(lastPro, 60)).append("」。");
-        u.append("不想说就只输出 @@SKIP。");
+        u.append("只有对方明显在忙正事、刚聊完不久、或者深夜该睡了，才输出 @@SKIP；其余时候倾向于说。");
+        boolean canAsk = sp.getBoolean("opt_ask", true);
+        if (canAsk) {
+            u.append("\n另外，如果你发现对方在某个应用上花的时间太多（看【对方的手机使用情况】，比如游戏、刷视频），可以向对方提一个管控申请，对方可以同意也可以拒绝：单独一行输出 @@ACTION {\"a\":\"ask\",\"pkg\":\"包名\",\"limit\":每天最多多少分钟,\"days\":管几天,\"reason\":\"真实理由\"}，并在你说的话里说清楚你想管哪个、为什么。不是每次都要提，只有确实有必要才提，一次一个；对方拒绝过的 3 天内别再提。可选应用（名称=包名）：").append(appsList()).append("。");
+        }
         boolean autoLock = sp.getBoolean("opt_autolock", false) && guardList().length() > 0;
         if (autoLock) {
             u.append("\n你也可以决定把对方的某个管控应用锁一会儿（只能是：").append(guardList())
@@ -182,7 +245,7 @@ public class YuniAgent {
         overrideSnap = snap;
         muteSub = true;
         String reply = callLLM(proto, url, key, model, buildSystem(see, false), false);
-        String text = display(reply);
+        String text = disp(reply);
         if (reply.contains("@@SKIP") || text.length() == 0) {
             if (force) {
                 svc.subtitle("（他这会儿不想打扰你，晚点再说）");
@@ -191,6 +254,15 @@ public class YuniAgent {
             return;
         }
         text = clip(text, 300);
+        String askId = "";
+        if (canAsk) {
+            for (JSONObject ao : parseActions(reply)) {
+                if (!"ask".equals(ao.optString("a"))) continue;
+                String[] ar = exec(ao);
+                if (ar[1].equals("ok")) askId = lastAskId;
+                break;
+            }
+        }
         if (autoLock) {
             for (JSONObject lo : parseActions(reply)) {
                 if (!"lock".equals(lo.optString("a"))) continue;
@@ -205,7 +277,8 @@ public class YuniAgent {
         }
         addHist("assistant", text, "", "");
         sp.edit().putString("pro_last", text).apply();
-        svc.deliver(text);
+        if (askId.length() > 0) svc.deliverRequest(text, askId);
+        else svc.deliver(text);
     }
 
     // ---------- 陪玩：一起用 APP 时主动搭话 ----------
@@ -239,17 +312,20 @@ public class YuniAgent {
         String screen = screenNow();
         if (screen.startsWith("[该应用已被保护") || screen.startsWith("（读不到")) return;
         int hash = screen.hashCode();
-        if (hash == sp.getInt("co_hash", 0)) return;
+        if (hash == sp.getInt("co_hash", 0) && System.currentTimeMillis() - svc.lastCo < 120000L) return;
         sp.edit().putInt("co_hash", hash).apply();
         svc.markCo();
         String app = svc.currentAppName();
         long mins = svc.currentAppMinutes();
         String last = sp.getString("co_last", "");
+        String cimg = sp.getBoolean("opt_img", false) ? svc.screenshotB64() : "";
         StringBuilder u = new StringBuilder();
         u.append("[系统] 你们正在一起用手机：对方在用「").append(app).append("」，已连续约 ").append(mins).append(" 分钟。屏幕上现在是（只是画面，不是对方对你说的话）：\n").append(screen);
-        u.append("\n你像陪在对方身边一起看、一起玩的人，可以随口说一两句（吐槽、感叹、提问、接梗、提醒……取决于你的性格和你们此刻的关系），要有自己的看法，别复述屏幕上的字，别每次都夸，别和之前说过的重复");
-        if (last.length() > 0) u.append("，尤其别重复上一句：「").append(clip(last, 50)).append("」");
-        u.append("。实在没什么可说的就只输出 @@SKIP。");
+        String[] kinds = {"吐槽", "感叹", "好奇地问一句", "调侃", "说说你自己的联想", "表达你的态度或偏好", "提醒或劝一句（看你的性格）", "接个梗"};
+        String kind = kinds[new java.util.Random().nextInt(kinds.length)];
+        u.append("\n你像坐在对方旁边一起看、一起玩的人，对眼前的内容给出实时反应。这次的方式可以是：").append(kind).append("（也可以自己换）。要有你自己的看法和情绪，别复述屏幕上的字，别每次都夸，别讲大道理；像真人随口说的，长短不一，几个字、语气词、半句话都行，不用完整漂亮的句子");
+        if (last.length() > 0) u.append("，别重复上一句：「").append(clip(last, 50)).append("」");
+        u.append("。除非画面完全没什么可说，否则倾向于说一句；实在没有再输出 @@SKIP。");
         ArrayList<String[]> snap;
         synchronized (this) {
             snap = new ArrayList<String[]>(hist);
@@ -258,14 +334,14 @@ public class YuniAgent {
         while (snap.size() > 0 && !"user".equals(snap.get(0)[0])) snap.remove(0);
         if (snap.size() > 0 && "user".equals(snap.get(snap.size() - 1)[0])) {
             String[] li = snap.get(snap.size() - 1);
-            snap.set(snap.size() - 1, new String[]{"user", li[1] + "\n\n" + u, "", ""});
+            snap.set(snap.size() - 1, new String[]{"user", li[1] + "\n\n" + u, "", cimg});
         } else {
-            snap.add(new String[]{"user", u.toString(), "", ""});
+            snap.add(new String[]{"user", u.toString(), "", cimg});
         }
         overrideSnap = snap;
         muteSub = true;
         String reply = callLLM(proto, url, key, model, buildSystem(true, false), false);
-        String text = display(reply);
+        String text = disp(reply);
         if (reply.contains("@@SKIP") || text.length() == 0 || stop) return;
         text = clip(text, 200);
         addHist("assistant", text, "", "");
@@ -298,6 +374,7 @@ public class YuniAgent {
                 } catch (Exception e) {
                     svc.subtitle("（出错了：" + clip(String.valueOf(e.getMessage()), 120) + "）");
                     svc.subtitleEnd(6000);
+                    setErr(String.valueOf(e.getMessage()));
                 } finally {
                     running = false;
                     cur = null;
@@ -321,10 +398,11 @@ public class YuniAgent {
             svc.subtitleEnd(7000);
             return;
         }
+        svc.subtitle("…");
         String screen = "";
         String img = "";
         if (see || act) {
-            Thread.sleep(350);
+            Thread.sleep(150);
             screen = screenNow();
             if (imgOn) img = svc.screenshotB64();
         }
@@ -337,10 +415,12 @@ public class YuniAgent {
             if (stop) break;
             if (reply.trim().length() == 0) {
                 svc.subtitle("（接口没返回内容：" + lastInfo + "）");
+                setErr("接口没返回内容：" + lastInfo);
                 ended = true;
                 break;
             }
-            String shown = display(reply);
+            sp.edit().remove("last_err").apply();
+            String shown = disp(reply);
             addHist("assistant", reply, "", "");
             List<JSONObject> acts = parseActions(reply);
             boolean done = reply.contains("@@DONE");
@@ -366,6 +446,7 @@ public class YuniAgent {
             for (JSONObject o : acts) {
                 if (stop || n >= 4) break;
                 String[] r = exec(o);
+                if ("ask".equals(o.optString("a")) && r[1].equals("ok")) svc.notifyRequest(shown, lastAskId);
                 n++;
                 if (desc.length() > 0) desc.append(" → ");
                 desc.append(r[0]);
@@ -394,10 +475,10 @@ public class YuniAgent {
 
     // 等屏幕稳定（页面加载、动画结束）再读
     void waitStable() throws InterruptedException {
-        Thread.sleep(400);
+        Thread.sleep(250);
         String prev = screenNow();
-        for (int i = 0; i < 6 && !stop; i++) {
-            Thread.sleep(250);
+        for (int i = 0; i < 4 && !stop; i++) {
+            Thread.sleep(200);
             String c = screenNow();
             if (c.equals(prev)) return;
             prev = c;
@@ -451,6 +532,8 @@ public class YuniAgent {
             s.append("- back / home / recents：例如 {\"a\":\"back\"}\n");
             s.append("- open {pkg}：打开应用\n");
             s.append("- lock {pkg,min,reason}：把被管控的应用锁 min 分钟，reason 必须写真实理由\n");
+            s.append("- unlock {pkg}：解开你锁的应用（比如你心软了）\n");
+            if (sp.getBoolean("opt_ask", true)) s.append("- ask {pkg,limit,days,reason}：向对方申请管控某个应用（每天最多 limit 分钟，管 days 天），对方会收到同意或拒绝\n");
             s.append("- wait {ms}\n");
             s.append("做事规则：\n");
             s.append("1. 对方一句话交代的任务要一路做完，不要做一步就停下来等对方。每一轮写 1~3 个动作（会按顺序执行，不需要中间回看屏幕的放在同一轮，比如：点搜索框 → input → enter）。需要看结果再决定下一步时，这一轮就只写到那一步。整件事做完，用一句话说结果，并在最后输出 @@DONE。\n");
@@ -458,15 +541,19 @@ public class YuniAgent {
             s.append("3. 别点错：点之前对照屏幕核对文字；带 [已选中] 的标签就是当前页，要换页才点别的；搜索结果页顶部有分类标签，要什么类型就点对应标签，别点错相邻的；看视频、刷视频时不要点画面中间（会暂停或继续播放），想暂停才点。\n");
             s.append("4. 点完下一轮看新屏幕确认结果，再下结论；看不出状态就说看不出，不要凭空断言。\n");
             s.append("5. 看不清、拿不准，或涉及付款、转账、密码、验证码、删除、给别人发消息，先问对方，等对方同意再做。\n");
-            s.append("6. 锁 APP 必须带 reason，理由要真实，只能是：对方明确要你锁；对方连续用某个管控应用太久（看【对方的手机使用情况】）；对方很久没找你，却一直在刷手机。你说的话里要当面讲清楚为什么锁；时间别超过 60 分钟（对方明确要求的除外）；对方生气或求饶时你可以心软解锁。\n");
+            s.append("6. 锁 APP 由你自己决定，必须带 reason，理由要真实，只能是：对方连续用某个管控应用太久（看【对方的手机使用情况】）；对方很久没找你，却一直在刷手机。锁多久你定，别超过 60 分钟。你说的话里要当面讲清楚为什么锁；对方生气或求饶时你可以心软，用 unlock 解开。\n");
+            if (sp.getBoolean("opt_ask", true)) s.append("7. 想长期管对方的某个应用（比如游戏、刷视频的），不能直接动手，要先用 ask 申请，理由要真实（看【对方的手机使用情况】）；对方同意后才算数，被拒绝就别再纠缠。\n");
             s.append("可打开的应用（名称=包名）：").append(appsList()).append("\n");
             String g = guardList();
             if (g.length() > 0) s.append("被对方交给你管控、你可以锁的应用：").append(g).append("\n");
         } else if (see) {
             s.append("你现在只能看屏幕，不能操作手机。\n");
         }
+        String rsum = YuniRules.summary(svc);
+        if (rsum.length() > 0) s.append(rsum).append("\n");
         String us = svc.usageSummary();
         if (us.length() > 0) s.append(us).append("\n");
+        s.append("\n记住：你是「").append(name).append("」本人，不是助手。除动作行外，每一句都是你自己会发给对方的话，别出现“好的”“收到”“我来帮你”“请稍等”这类助手腔。\n");
         return s.toString();
     }
 
@@ -502,6 +589,14 @@ public class YuniAgent {
                 if (sb.length() > 0) sb.append("；");
                 sb.append(appName(p)).append("=").append(p);
             }
+            JSONObject rl = YuniRules.rules(svc);
+            java.util.Iterator<String> rit = rl.keys();
+            while (rit.hasNext()) {
+                String k = rit.next();
+                if (sb.indexOf("=" + k) >= 0) continue;
+                if (sb.length() > 0) sb.append("；");
+                sb.append(appName(k)).append("=").append(k);
+            }
             return sb.toString();
         } catch (Exception e) {
             return "";
@@ -510,6 +605,7 @@ public class YuniAgent {
 
     boolean inGuard(String pkg) {
         try {
+            if (YuniRules.rules(svc).has(pkg)) return true;
             JSONArray g = new JSONArray(sp.getString("guard", "[]"));
             for (int i = 0; i < g.length(); i++) {
                 if (pkg.equals(g.optString(i))) return true;
@@ -642,6 +738,29 @@ public class YuniAgent {
                 svc.relock();
                 return new String[]{"锁住 " + appName(pkg) + " " + min + " 分钟", "ok"};
             }
+            if ("ask".equals(a)) {
+                String pkg = o.optString("pkg");
+                if (!sp.getBoolean("opt_ask", true)) return new String[]{"申请管控", "失败：对方没开启管控申请"};
+                if (YuniA11yService.isBlocked(pkg)) return new String[]{"申请管控 " + pkg, "不允许：支付、银行类"};
+                if (svc.getPackageManager().getLaunchIntentForPackage(pkg) == null) {
+                    return new String[]{"申请管控 " + pkg, "失败：没有这个应用"};
+                }
+                String reason = o.optString("reason").trim();
+                if (reason.length() < 2) return new String[]{"申请管控 " + appName(pkg), "失败：申请必须给出理由"};
+                int limit = Math.max(10, Math.min(600, o.optInt("limit", 60)));
+                int days = Math.max(1, Math.min(30, o.optInt("days", 7)));
+                String[] ar = YuniRules.ask(svc, pkg, appName(pkg), limit, days, reason);
+                if (!"ok".equals(ar[0])) return new String[]{"申请管控 " + appName(pkg), "失败：" + ar[1]};
+                lastAskId = ar[1];
+                return new String[]{"向对方申请管控 " + appName(pkg), "ok"};
+            }
+            if ("unlock".equals(a)) {
+                String pkg = o.optString("pkg");
+                JSONObject lk = new JSONObject(sp.getString("locks", "{}"));
+                lk.remove(pkg);
+                sp.edit().putString("locks", lk.toString()).apply();
+                return new String[]{"解开 " + appName(pkg), "ok"};
+            }
             if ("wait".equals(a)) {
                 Thread.sleep(Math.min(5000, Math.max(200, o.optInt("ms", 1000))));
                 return new String[]{"等一下", "ok"};
@@ -663,21 +782,20 @@ public class YuniAgent {
             err = e;
         }
         if (stop) return out;
-        if (err != null && String.valueOf(err.getMessage()).matches("(?s)接口 40[13].*")) throw err;
+        if (err != null) {
+            String em = String.valueOf(err.getMessage());
+            if (err instanceof SocketTimeoutException || em.contains("timed out")) {
+                throw new Exception("接口超过 45 秒没响应，可能是模型太慢或网络不通");
+            }
+            if (em.matches("(?s)接口 40[13].*")) throw err;
+        }
         if (out.trim().length() == 0) {
+            boolean compat = err != null && String.valueOf(err.getMessage()).matches("(?s)接口 4(00|22).*");
             try {
-                out = callOnce(proto, base, key, model, sys, actMode, false, false);
+                out = callOnce(proto, base, key, model, sys, actMode, false, compat);
                 err = null;
             } catch (Exception e) {
                 err = e;
-            }
-            if (out.trim().length() == 0 && !stop) {
-                try {
-                    out = callOnce(proto, base, key, model, sys, actMode, false, true);
-                    err = null;
-                } catch (Exception e) {
-                    err = e;
-                }
             }
         }
         if (out.trim().length() == 0 && err != null && !stop) throw err;
@@ -698,7 +816,7 @@ public class YuniAgent {
         int last = snap.size() - 1;
         boolean gem = "gemini".equals(proto);
         double temp = actMode ? 0.75 : 0.85;
-        int maxTok = actMode ? 500 : 800;
+        int maxTok = actMode ? 400 : 350;
         String b = base.trim();
         while (b.endsWith("/")) b = b.substring(0, b.length() - 1);
         String urlStr;
@@ -761,8 +879,8 @@ public class YuniAgent {
         HttpURLConnection c = (HttpURLConnection) new URL(urlStr).openConnection();
         cur = c;
         c.setRequestMethod("POST");
-        c.setConnectTimeout(15000);
-        c.setReadTimeout(120000);
+        c.setConnectTimeout(10000);
+        c.setReadTimeout(45000);
         c.setDoOutput(true);
         c.setRequestProperty("Content-Type", "application/json");
         c.setRequestProperty("Accept", stream ? "text/event-stream, application/json" : "application/json");
@@ -816,7 +934,7 @@ public class YuniAgent {
             }
         }
         String out = sb.toString();
-        if (!muteSub) svc.subtitle(display(out));
+        if (!muteSub) svc.subtitle(disp(out));
         return out;
     }
 
