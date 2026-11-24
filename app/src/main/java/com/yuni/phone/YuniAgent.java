@@ -402,11 +402,12 @@ public class YuniAgent {
         boolean act = sp.getBoolean("opt_act", false);
         boolean imgOn = sp.getBoolean("opt_img", false);
         int max = sp.getInt("opt_steps", 20);
-        final boolean auto = text.matches("(?s).*(自己刷|你来刷|陪我刷|一直刷|随便刷|刷一会|接着刷|继续刷|自己玩|你来玩|自己看|随便看).*");
+        final boolean auto = text.matches("(?s).*(你自己刷|你来刷|你自己玩|你来玩).*");
         if (auto) max = 60;
-        final boolean taskLike = auto || text.matches("(?s).*(打开|点|搜|找|刷|滑|翻|播放|暂停|关注|点赞|收藏|评论|返回|回到|关闭|切换|锁|解锁|帮我|替我|给我|去).*");
+        final boolean explicitReq = text.matches("(?s).*(帮我|替我|你来|帮忙|你去|让你|给我|你自己|你来刷|你来玩).*");
+        final boolean taskLike = auto || explicitReq;
         // 纯提问（问能不能看到、是不是、为什么）：这一轮只回答，不动手
-        if (!auto && !taskLike && text.matches("(?s).*(吗|？|\\?|能不能|看不看得到|看得到|听得到|是不是|为什么|怎么回事).*")) act = false;
+        if (!auto && !explicitReq) act = false;
         String url = sp.getString("api_url", "");
         String key = sp.getString("api_key", "");
         String model = sp.getString("api_model", "");
@@ -479,7 +480,7 @@ public class YuniAgent {
             boolean wasVerify = verifyPending;
             verifyPending = false;
             if (acts.isEmpty()) {
-                if (act && !done && !wasVerify && (prevAct || taskLike) && nudges < (auto ? 1 : 3)) {
+                if (act && !done && !wasVerify && (prevAct || taskLike) && nudges < (auto ? 1 : 2)) {
                     nudges++;
                     screen = screenNow();
                     img = imgOn ? svc.screenshotB64() : "";
@@ -667,6 +668,7 @@ public class YuniAgent {
             s.append("6. 锁 APP 只能在三种情况下：why=ignored，对方超过 2 小时没找你；why=overuse，对方今天在这个应用上用了 60 分钟以上；why=asked，对方刚刚明确让你锁。reason 写真实理由，不能编。没有这三种情况就不锁。默认锁 30 分钟，最多 60 分钟（对方明确要求的最多 180 分钟）；一天最多主动锁 4 次。对方生气或求饶时你可以心软，用 unlock 解开。\n");
             s.append("- 点击优先用 tap_text（按文字找按钮）；找不到文字时才用 tap {nx,ny} 比例坐标，点完没反应就换个位置，同一位置别重复点超过两次。\n");
             s.append("看不清画面（读不到文字、截图也模糊）时，不要滑动，直接说「我看不清，要开识图」；上滑、下滑只在你确认要看下一条的时候做，不要为了「显得在忙」而划。\n");
+            s.append("只有对方明确让你做事（比如「帮我搜一下」「你来点开」）时，你才动手。对方说「一起刷」「我在刷」「陪我看」，你只聊天、只说感受，不要替他划、不要点、不要播放暂停。\n");
             s.append("7. 遇到弹窗、广告、权限框，先关掉再继续；点了没反应就换种方式（tap_text 换成 tap 坐标，或先滑动找一下），同一个动作别重复超过两次。\n");
             if (sp.getBoolean("opt_ask", true)) s.append("8. 想长期管对方的某个应用（比如刷视频、刷短视频的），不能直接动手，要先用 ask 申请，理由要真实（看【对方的手机使用情况】）；对方同意后才算数，被拒绝就别再纠缠。\n");
             int[] ssz = svc.screenSize();
