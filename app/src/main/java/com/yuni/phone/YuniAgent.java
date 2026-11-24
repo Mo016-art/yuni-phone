@@ -407,19 +407,27 @@ public class YuniAgent {
             int[] dz0 = svc.screenSize();
             int cx = dz0[0] / 2, cy = dz0[1] / 2;
             String sb0 = svc.frameSig();
+            // 第一步：点一下中央空白，确认系统点击能进这个界面
+            svc.onMain(new Callable<Boolean>() {
+                public Boolean call() {
+                    return svc.tap(cx, cy);
+                }
+            }, false);
+            String vt = svc.verifyChange(sb0);
+            // 第二步：再滑一下，确认手势
+            String sb1 = svc.frameSig();
             svc.onMain(new Callable<Boolean>() {
                 public Boolean call() {
                     return svc.swipe(cx, cy + dz0[1] / 6, cx, cy - dz0[1] / 6, 300);
                 }
             }, false);
-            String v0 = svc.verifyChange(sb0);
-            if ("changed".equals(v0)) {
+            String vs = svc.verifyChange(sb1);
+            if ("changed".equals(vs) || "changed".equals(vt)) {
                 sp.edit().putBoolean("gesture_ok", true).apply();
-            } else if ("same".equals(v0)) {
-                sp.edit().putBoolean("gesture_bad", true).apply();
-                svc.subtitle("我试了滑动，画面没有任何变化。这个界面可能不接受系统手势（很多游戏都这样），我没法替你玩。要不要换个能用的操作方式？");
-                svc.subtitleEnd(9000);
-                return;
+            } else if ("same".equals(vs) && "same".equals(vt)) {
+                // 两个都没变：不急着下结论，留给后面的文字/坐标操作去验证
+                svc.subtitle("刚才试了点击和滑动，画面没变。我先按文字和坐标慢慢来，不行再告诉你。");
+                svc.subtitleEnd(5000);
             }
         }
         String screen = "";
@@ -615,6 +623,7 @@ public class YuniAgent {
             s.append("- long_press {x,y,ms}：长按 ms 毫秒\n");
             s.append("- drag {x1,y1,x2,y2,ms}：按住从起点拖到终点，再继续按住直到 ms 结束（游戏里推摇杆、蓄力）\n");
             s.append("- multi {strokes:[{x1,y1,x2,y2,ms},...]}：多根手指同时按（比如左手推摇杆、右手滑动转视角）\n");
+            s.append("- 点击的优先级：能读到文字的按钮（菜单、Play、Settings、确定、开始）一律用 tap_text；画面里的图标或游戏自绘的东西，才用比例坐标 tap {nx,ny}，而且必须先在截图上估准位置，别随便点。点击后如果画面没变，说明点偏了，换一个位置再试，不要重复点同一个地方超过两次。\n");
             s.append("- 坐标除了 [可点 x,y] 给的像素，也可以用 0~1000 的比例坐标：nx,ny（nx1,ny1,nx2,ny2），nx 从左到右、ny 从上到下；看截图判断位置时用它。\n");
             s.append("- back / home / recents：例如 {\"a\":\"back\"}\n");
             s.append("- open {pkg}：打开应用\n");
@@ -752,12 +761,20 @@ public class YuniAgent {
                 int[] dz = svc.screenSize();
                 final int x = px(o, "x", "nx", dz[0]);
                 final int y = px(o, "y", "ny", dz[1]);
+                String before = svc.onMain(new Callable<String>() {
+                    public String call() {
+                        return svc.frameSig();
+                    }
+                }, "");
                 boolean ok = svc.onMain(new Callable<Boolean>() {
                     public Boolean call() {
                         return svc.tap(x, y);
                     }
                 }, false);
-                return new String[]{"点击 (" + x + "," + y + ")", ok ? "ok" : "失败"};
+                if (!ok) return new String[]{"点击 (" + x + "," + y + ")", "失败：系统没接受"};
+                String v = svc.verifyChange(before);
+                if ("same".equals(v)) return new String[]{"点击 (" + x + "," + y + ")", "没反应：画面没变，位置可能偏了，换个位置或用文字点"};
+                return new String[]{"点击 (" + x + "," + y + ")", "ok"};
             }
             if ("tap_text".equals(a)) {
                 final String t = o.optString("text");
