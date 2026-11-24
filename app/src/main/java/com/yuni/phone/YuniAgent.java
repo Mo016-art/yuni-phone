@@ -31,6 +31,7 @@ public class YuniAgent {
     volatile boolean muteSub = false;
     volatile boolean bg = false;
     volatile String lastAskId = "";
+    volatile String curUserText = "";
     String banRaw = "";
     ArrayList<Object[]> banCache = new ArrayList<Object[]>();
     volatile String lastInfo = "";
@@ -196,6 +197,7 @@ public class YuniAgent {
     }
 
     void doProactive(boolean force) throws Exception {
+        curUserText = "";
         String url = sp.getString("api_url", "");
         String key = sp.getString("api_key", "");
         String model = sp.getString("api_model", "");
@@ -235,7 +237,7 @@ public class YuniAgent {
         boolean autoLock = sp.getBoolean("opt_autolock", false) && guardList().length() > 0;
         if (autoLock) {
             u.append("\n你也可以决定把对方的某个管控应用锁一会儿（只能是：").append(guardList())
-                .append("），单独一行输出 @@ACTION {\"a\":\"lock\",\"pkg\":\"包名\",\"min\":20,\"reason\":\"真实理由\"}。理由只能是：对方连续用它太久，或者对方很久没找你却一直在刷手机（见【对方的手机使用情况】和上面「距离对方上次和你说话」的时间）；没有这样的理由就不要锁。锁了要在你说的话里当面讲清楚为什么，别超过 60 分钟。");
+                .append("），单独一行输出 @@ACTION {\"a\":\"lock\",\"pkg\":\"包名\",\"min\":20,\"reason\":\"真实理由\",\"why\":\"ignored或overuse\"}。理由只能是：对方连续用它太久，或者对方很久没找你却一直在刷手机（见【对方的手机使用情况】和上面「距离对方上次和你说话」的时间）；没有这样的理由就不要锁。锁了要在你说的话里当面讲清楚为什么，别超过 60 分钟。");
         }
         ArrayList<String[]> snap;
         synchronized (this) {
@@ -313,6 +315,7 @@ public class YuniAgent {
     }
 
     void doCompanion() throws Exception {
+        curUserText = "";
         String url = sp.getString("api_url", "");
         String key = sp.getString("api_key", "");
         String model = sp.getString("api_model", "");
@@ -394,6 +397,7 @@ public class YuniAgent {
     }
 
     void loop(String text) throws Exception {
+        curUserText = text;
         boolean see = sp.getBoolean("opt_see", false);
         boolean act = sp.getBoolean("opt_act", false);
         boolean imgOn = sp.getBoolean("opt_img", false);
@@ -401,6 +405,8 @@ public class YuniAgent {
         final boolean auto = text.matches("(?s).*(自己刷|你来刷|陪我刷|一直刷|随便刷|刷一会|接着刷|继续刷|自己玩|你来玩|自己看|随便看).*");
         if (auto) max = 60;
         final boolean taskLike = auto || text.matches("(?s).*(打开|点|搜|找|刷|滑|翻|播放|暂停|关注|点赞|收藏|评论|返回|回到|关闭|切换|锁|解锁|帮我|替我|给我|去).*");
+        // 纯提问（问能不能看到、是不是、为什么）：这一轮只回答，不动手
+        if (!auto && !taskLike && text.matches("(?s).*(吗|？|\\?|能不能|看不看得到|看得到|听得到|是不是|为什么|怎么回事).*")) act = false;
         String url = sp.getString("api_url", "");
         String key = sp.getString("api_key", "");
         String model = sp.getString("api_model", "");
@@ -648,7 +654,7 @@ public class YuniAgent {
             s.append("- swipe {x1,y1,x2,y2}：滑动（往下翻页 = 从下往上滑）\n");
             s.append("- back / home / recents：例如 {\"a\":\"back\"}\n");
             s.append("- open {pkg}：打开应用\n");
-            s.append("- lock {pkg,min,reason}：把被管控的应用锁 min 分钟，reason 必须写真实理由\n");
+            s.append("- lock {pkg,min,reason,why}：把被管控的应用锁 min 分钟；why 只能是 ignored / overuse / asked（见规则 6）\n");
             s.append("- unlock {pkg}：解开你锁的应用（比如你心软了）\n");
             if (sp.getBoolean("opt_ask", true)) s.append("- ask {pkg,limit,days,reason}：向对方申请管控某个应用（每天最多 limit 分钟，管 days 天），对方会收到同意或拒绝\n");
             s.append("- wait {ms}\n");
@@ -658,7 +664,7 @@ public class YuniAgent {
             s.append("3. 别点错：点之前对照屏幕核对文字；带 [已选中] 的标签就是当前页，要换页才点别的；搜索结果页顶部有分类标签，要什么类型就点对应标签，别点错相邻的；看视频、刷视频时不要点画面中间（会暂停或继续播放），想暂停才点。\n");
             s.append("4. 点完下一轮看新屏幕确认结果，再下结论；看不出状态就说看不出，不要凭空断言。\n");
             s.append("5. 看不清、拿不准，或涉及付款、转账、密码、验证码、删除、给别人发消息，先问对方，等对方同意再做。\n");
-            s.append("6. 锁 APP 由你自己决定，必须带 reason，理由要真实，只能是：对方连续用某个管控应用太久（看【对方的手机使用情况】）；对方很久没找你，却一直在刷手机。锁多久你定，别超过 60 分钟。你说的话里要当面讲清楚为什么锁；对方生气或求饶时你可以心软，用 unlock 解开。\n");
+            s.append("6. 锁 APP 只能在三种情况下：why=ignored，对方超过 2 小时没找你；why=overuse，对方今天在这个应用上用了 60 分钟以上；why=asked，对方刚刚明确让你锁。reason 写真实理由，不能编。没有这三种情况就不锁。默认锁 30 分钟，最多 60 分钟（对方明确要求的最多 180 分钟）；一天最多主动锁 4 次。对方生气或求饶时你可以心软，用 unlock 解开。\n");
             s.append("- 点击优先用 tap_text（按文字找按钮）；找不到文字时才用 tap {nx,ny} 比例坐标，点完没反应就换个位置，同一位置别重复点超过两次。\n");
             s.append("看不清画面（读不到文字、截图也模糊）时，不要滑动，直接说「我看不清，要开识图」；上滑、下滑只在你确认要看下一条的时候做，不要为了「显得在忙」而划。\n");
             s.append("7. 遇到弹窗、广告、权限框，先关掉再继续；点了没反应就换种方式（tap_text 换成 tap 坐标，或先滑动找一下），同一个动作别重复超过两次。\n");
@@ -933,12 +939,29 @@ public class YuniAgent {
             }
             if ("lock".equals(a)) {
                 String pkg = o.optString("pkg");
-                int min = Math.max(1, Math.min(10080, o.optInt("min", 30)));
                 if (!inGuard(pkg)) return new String[]{"锁 " + pkg, "失败：不在管控名单里"};
                 String reason = o.optString("reason").trim();
                 if (reason.length() < 2) return new String[]{"锁 " + appName(pkg), "失败：锁 APP 必须给出理由"};
+                String why = o.optString("why", "");
+                long now = System.currentTimeMillis();
+                long lastUser = sp.getLong("last_user_ts", 0);
+                boolean asked = curUserText.matches("(?s).*(锁|锁住|锁一下|锁起来|冻结).*");
+                boolean ignored = why.equals("ignored") && lastUser > 0 && now - lastUser >= 2L * 3600000L;
+                long usedMs = Math.max(svc.usageToday(pkg), YuniRules.ownUse(svc, pkg));
+                boolean overused = why.equals("overuse") && usedMs >= 60L * 60000L;
+                boolean byUser = why.equals("asked") && asked;
+                if (!ignored && !overused && !byUser) {
+                    return new String[]{"锁 " + appName(pkg), "失败：规则不允许。只能在三种情况下锁：对方超过 2 小时没找你（why=ignored）；对方今天在这个应用上用了 60 分钟以上（why=overuse）；对方刚刚明确让你锁（why=asked）"};
+                }
+                int min = Math.max(1, Math.min(byUser ? 180 : 60, o.optInt("min", 30)));
+                if (!byUser) {
+                    String day = new java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.CHINA).format(new java.util.Date());
+                    int cnt = day.equals(sp.getString("lock_day", "")) ? sp.getInt("lock_cnt", 0) : 0;
+                    if (cnt >= 4) return new String[]{"锁 " + appName(pkg), "失败：今天已经锁了 4 次，不再锁"};
+                    sp.edit().putString("lock_day", day).putInt("lock_cnt", cnt + 1).apply();
+                }
                 JSONObject lk = new JSONObject(sp.getString("locks", "{}"));
-                lk.put(pkg, System.currentTimeMillis() + min * 60000L);
+                lk.put(pkg, now + min * 60000L);
                 JSONObject rs = new JSONObject(sp.getString("lock_reasons", "{}"));
                 rs.put(pkg, clip(reason, 60));
                 sp.edit().putString("locks", lk.toString()).putString("lock_reasons", rs.toString()).apply();
