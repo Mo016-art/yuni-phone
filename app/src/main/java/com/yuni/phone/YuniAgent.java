@@ -451,7 +451,7 @@ public class YuniAgent {
             svc.subtitleEnd(6000);
             return;
         }
-        addHist("user", auto ? text + "\n[系统提示] 自主模式：你自己操作，边看边划，每看一会儿就划到下一个，每一步说一句真实的反应；除非我明确说了，别点赞、关注、评论、收藏；我点悬浮球你就停。" : text, screen, img);
+        addHist("user", auto ? text + "\n[系统提示] 自主模式：你自己操作，先看清当前画面再动，看不清就直接说看不清、不要硬划；每次划之前先说一句你在看什么；除非我明确说了，别点赞、关注、评论、收藏；我点悬浮球你就停。" : text, screen, img);
         boolean ended = false;
         boolean prevAct = false;
         boolean verifyPending = false;
@@ -473,7 +473,7 @@ public class YuniAgent {
             boolean wasVerify = verifyPending;
             verifyPending = false;
             if (acts.isEmpty()) {
-                if (act && !done && !wasVerify && (prevAct || taskLike) && nudges < (auto ? 8 : 3)) {
+                if (act && !done && !wasVerify && (prevAct || taskLike) && nudges < (auto ? 1 : 3)) {
                     nudges++;
                     screen = screenNow();
                     img = imgOn ? svc.screenshotB64() : "";
@@ -660,6 +660,7 @@ public class YuniAgent {
             s.append("5. 看不清、拿不准，或涉及付款、转账、密码、验证码、删除、给别人发消息，先问对方，等对方同意再做。\n");
             s.append("6. 锁 APP 由你自己决定，必须带 reason，理由要真实，只能是：对方连续用某个管控应用太久（看【对方的手机使用情况】）；对方很久没找你，却一直在刷手机。锁多久你定，别超过 60 分钟。你说的话里要当面讲清楚为什么锁；对方生气或求饶时你可以心软，用 unlock 解开。\n");
             s.append("- 点击优先用 tap_text（按文字找按钮）；找不到文字时才用 tap {nx,ny} 比例坐标，点完没反应就换个位置，同一位置别重复点超过两次。\n");
+            s.append("看不清画面（读不到文字、截图也模糊）时，不要滑动，直接说「我看不清，要开识图」；上滑、下滑只在你确认要看下一条的时候做，不要为了「显得在忙」而划。\n");
             s.append("7. 遇到弹窗、广告、权限框，先关掉再继续；点了没反应就换种方式（tap_text 换成 tap 坐标，或先滑动找一下），同一个动作别重复超过两次。\n");
             if (sp.getBoolean("opt_ask", true)) s.append("8. 想长期管对方的某个应用（比如刷视频、刷短视频的），不能直接动手，要先用 ask 申请，理由要真实（看【对方的手机使用情况】）；对方同意后才算数，被拒绝就别再纠缠。\n");
             int[] ssz = svc.screenSize();
