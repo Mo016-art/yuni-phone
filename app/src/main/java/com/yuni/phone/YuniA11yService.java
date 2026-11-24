@@ -1180,6 +1180,58 @@ public class YuniA11yService extends AccessibilityService {
         return dispatchGesture(new GestureDescription.Builder().addStroke(s).build(), null, null);
     }
 
+    public int[] screenSize() {
+        DisplayMetrics dm = new DisplayMetrics();
+        try {
+            ((WindowManager) getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay().getRealMetrics(dm);
+        } catch (Exception e) {
+            dm = getResources().getDisplayMetrics();
+        }
+        return new int[]{dm.widthPixels, dm.heightPixels};
+    }
+
+    // 多指手势：每根手指 {x1,y1,x2,y2,ms}。先移动到终点，再按住到 ms 结束（推摇杆、蓄力、长按）
+    public boolean gesture(int[][] st) {
+        if (st == null || st.length == 0 || blockedNow()) return false;
+        try {
+            GestureDescription.StrokeDescription[] s1 = new GestureDescription.StrokeDescription[st.length];
+            GestureDescription.Builder b1 = new GestureDescription.Builder();
+            boolean cont = false;
+            for (int i = 0; i < st.length; i++) {
+                int ms = Math.max(100, st[i][4]);
+                Path p = new Path();
+                p.moveTo(st[i][0], st[i][1]);
+                if (st[i][0] != st[i][2] || st[i][1] != st[i][3]) p.lineTo(st[i][2], st[i][3]);
+                if (Build.VERSION.SDK_INT >= 26 && ms > 450) {
+                    s1[i] = new GestureDescription.StrokeDescription(p, 0, 250, true);
+                    cont = true;
+                } else {
+                    s1[i] = new GestureDescription.StrokeDescription(p, 0, ms);
+                }
+                b1.addStroke(s1[i]);
+            }
+            GestureDescription g1 = b1.build();
+            if (!cont) return dispatchGesture(g1, null, null);
+            final GestureDescription.Builder b2 = new GestureDescription.Builder();
+            for (int i = 0; i < st.length; i++) {
+                int ms = Math.max(100, st[i][4]);
+                if (Build.VERSION.SDK_INT >= 26 && ms > 450) {
+                    Path q = new Path();
+                    q.moveTo(st[i][2], st[i][3]);
+                    b2.addStroke(s1[i].continueStroke(q, 0, ms - 250, false));
+                }
+            }
+            return dispatchGesture(g1, new AccessibilityService.GestureResultCallback() {
+                @Override
+                public void onCompleted(GestureDescription g) {
+                    dispatchGesture(b2.build(), null, null);
+                }
+            }, null);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public boolean swipe(int x1, int y1, int x2, int y2, int ms) {
         if (blockedNow()) return false;
         Path p = new Path();
@@ -1260,11 +1312,11 @@ public class YuniA11yService extends AccessibilityService {
                             Bitmap hw = Bitmap.wrapHardwareBuffer(r.getHardwareBuffer(), r.getColorSpace());
                             if (hw != null) {
                                 Bitmap sw = hw.copy(Bitmap.Config.ARGB_8888, false);
-                                int w = 640;
+                                int w = 800;
                                 int hh = Math.round(sw.getHeight() * (w / (float) sw.getWidth()));
                                 Bitmap sc = Bitmap.createScaledBitmap(sw, w, hh, true);
                                 ByteArrayOutputStream bo = new ByteArrayOutputStream();
-                                sc.compress(Bitmap.CompressFormat.JPEG, 55, bo);
+                                sc.compress(Bitmap.CompressFormat.JPEG, 60, bo);
                                 out[0] = Base64.encodeToString(bo.toByteArray(), Base64.NO_WRAP);
                             }
                             r.getHardwareBuffer().close();

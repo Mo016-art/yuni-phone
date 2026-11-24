@@ -409,6 +409,11 @@ public class YuniAgent {
             screen = screenNow();
             if (imgOn) img = svc.screenshotB64();
         }
+        if (act && !imgOn && blankScreen(screen)) {
+            svc.subtitle("这个界面读不到文字（多半是游戏），要在设置里开「识图」，我才看得见画面。");
+            svc.subtitleEnd(6000);
+            return;
+        }
         addHist("user", auto ? text + "\n[系统提示] 自主模式：你自己操作，边看边划，每看一会儿就划到下一个，每一步说一句真实的反应；除非我明确说了，别点赞、关注、评论、收藏；我点悬浮球你就停。" : text, screen, img);
         boolean ended = false;
         boolean prevAct = false;
@@ -449,8 +454,9 @@ public class YuniAgent {
             StringBuilder res = new StringBuilder();
             StringBuilder desc = new StringBuilder();
             int n = 0;
+            int cap = blankScreen(screen) ? 8 : 5;
             for (JSONObject o : acts) {
-                if (stop || n >= 5) break;
+                if (stop || n >= cap) break;
                 String[] r = exec(o);
                 if ("ask".equals(o.optString("a")) && r[1].equals("ok")) svc.notifyRequest(shown, lastAskId);
                 n++;
@@ -481,6 +487,38 @@ public class YuniAgent {
             svc.subtitle("（步数用完了，我先停在这儿，要继续你再说）");
         }
         svc.subtitleEnd(7000);
+    }
+
+    static int px(JSONObject o, String k, String nk, int full) {
+        if (o.has(nk)) return (int) (o.optDouble(nk, 0) / 1000.0 * full);
+        return o.optInt(k);
+    }
+
+    static int[] stroke(JSONObject o, int[] dz) {
+        int x1, y1, x2, y2;
+        if ((o.has("x") || o.has("nx")) && !o.has("x1") && !o.has("nx1")) {
+            x1 = px(o, "x", "nx", dz[0]);
+            y1 = px(o, "y", "ny", dz[1]);
+            x2 = x1;
+            y2 = y1;
+        } else {
+            x1 = px(o, "x1", "nx1", dz[0]);
+            y1 = px(o, "y1", "ny1", dz[1]);
+            x2 = px(o, "x2", "nx2", dz[0]);
+            y2 = px(o, "y2", "ny2", dz[1]);
+        }
+        int ms = Math.max(200, Math.min(8000, o.optInt("ms", 1000)));
+        return new int[]{x1, y1, x2, y2, ms};
+    }
+
+    // 读不到文字的界面（游戏、画布）
+    static boolean blankScreen(String s) {
+        if (s == null || s.startsWith("（读不到")) return true;
+        int n = 0;
+        for (String l : s.split("\n")) {
+            if (l.trim().length() > 0 && !l.startsWith("[当前应用")) n++;
+        }
+        return n <= 2;
     }
 
     // 自主模式：边看边等（可随时被叫停）
@@ -554,6 +592,10 @@ public class YuniAgent {
             s.append("- input {text}：往当前输入框里填字\n");
             s.append("- enter：对输入框按回车/搜索键\n");
             s.append("- swipe {x1,y1,x2,y2}：滑动（往下翻页 = 从下往上滑）\n");
+            s.append("- long_press {x,y,ms}：长按 ms 毫秒\n");
+            s.append("- drag {x1,y1,x2,y2,ms}：按住从起点拖到终点，再继续按住直到 ms 结束（游戏里推摇杆、蓄力）\n");
+            s.append("- multi {strokes:[{x1,y1,x2,y2,ms},...]}：多根手指同时按（比如左手推摇杆、右手滑动转视角）\n");
+            s.append("- 坐标除了 [可点 x,y] 给的像素，也可以用 0~1000 的比例坐标：nx,ny（nx1,ny1,nx2,ny2），nx 从左到右、ny 从上到下；看截图判断位置时用它。\n");
             s.append("- back / home / recents：例如 {\"a\":\"back\"}\n");
             s.append("- open {pkg}：打开应用\n");
             s.append("- lock {pkg,min,reason}：把被管控的应用锁 min 分钟，reason 必须写真实理由\n");
@@ -568,7 +610,10 @@ public class YuniAgent {
             s.append("5. 看不清、拿不准，或涉及付款、转账、密码、验证码、删除、给别人发消息，先问对方，等对方同意再做。\n");
             s.append("6. 锁 APP 由你自己决定，必须带 reason，理由要真实，只能是：对方连续用某个管控应用太久（看【对方的手机使用情况】）；对方很久没找你，却一直在刷手机。锁多久你定，别超过 60 分钟。你说的话里要当面讲清楚为什么锁；对方生气或求饶时你可以心软，用 unlock 解开。\n");
             s.append("7. 遇到弹窗、广告、权限框，先关掉再继续；点了没反应就换种方式（tap_text 换成 tap 坐标，或先滑动找一下），同一个动作别重复超过两次。\n");
-            if (sp.getBoolean("opt_ask", true)) s.append("8. 想长期管对方的某个应用（比如游戏、刷视频的），不能直接动手，要先用 ask 申请，理由要真实（看【对方的手机使用情况】）；对方同意后才算数，被拒绝就别再纠缠。\n");
+            s.append("8. 界面读不到文字（多半是游戏）时，靠截图判断、用比例坐标；推摇杆用 drag，左手摇杆右手转视角用 multi；一轮里可以连着写多个动作（最多 8 个），每步的话要短。\n");
+            if (sp.getBoolean("opt_ask", true)) s.append("9. 想长期管对方的某个应用（比如游戏、刷视频的），不能直接动手，要先用 ask 申请，理由要真实（看【对方的手机使用情况】）；对方同意后才算数，被拒绝就别再纠缠。\n");
+            int[] ssz = svc.screenSize();
+            s.append("当前屏幕 ").append(ssz[0]).append("×").append(ssz[1]).append(" 像素。\n");
             s.append("可打开的应用（名称=包名）：").append(appsList()).append("\n");
             String g = guardList();
             if (g.length() > 0) s.append("被对方交给你管控、你可以锁的应用：").append(g).append("\n");
@@ -684,8 +729,9 @@ public class YuniAgent {
         String a = o.optString("a");
         try {
             if ("tap".equals(a)) {
-                final int x = o.optInt("x");
-                final int y = o.optInt("y");
+                int[] dz = svc.screenSize();
+                final int x = px(o, "x", "nx", dz[0]);
+                final int y = px(o, "y", "ny", dz[1]);
                 boolean ok = svc.onMain(new Callable<Boolean>() {
                     public Boolean call() {
                         return svc.tap(x, y);
@@ -719,11 +765,37 @@ public class YuniAgent {
                 }, false);
                 return new String[]{"回车", ok ? "ok" : "失败：请改点「搜索」按钮"};
             }
+            if ("long_press".equals(a) || "drag".equals(a) || "multi".equals(a)) {
+                int[] dz = svc.screenSize();
+                ArrayList<int[]> st = new ArrayList<int[]>();
+                if ("multi".equals(a)) {
+                    JSONArray arr = o.optJSONArray("strokes");
+                    if (arr == null || arr.length() == 0) return new String[]{"多指操作", "失败：缺少 strokes"};
+                    for (int i = 0; i < arr.length() && i < 4; i++) {
+                        JSONObject so = arr.optJSONObject(i);
+                        if (so != null) st.add(stroke(so, dz));
+                    }
+                } else {
+                    st.add(stroke(o, dz));
+                }
+                final int[][] sa = st.toArray(new int[0][]);
+                int total = 0;
+                for (int[] s0 : sa) total = Math.max(total, s0[4]);
+                boolean ok = svc.onMain(new Callable<Boolean>() {
+                    public Boolean call() {
+                        return svc.gesture(sa);
+                    }
+                }, false);
+                if (ok) Thread.sleep(Math.min(8300, total + 150));
+                String nm = "long_press".equals(a) ? "长按" : ("drag".equals(a) ? "按住拖动" : "多指操作");
+                return new String[]{nm, ok ? "ok" : "失败"};
+            }
             if ("swipe".equals(a)) {
-                final int x1 = o.optInt("x1");
-                final int y1 = o.optInt("y1");
-                final int x2 = o.optInt("x2");
-                final int y2 = o.optInt("y2");
+                int[] dz = svc.screenSize();
+                final int x1 = px(o, "x1", "nx1", dz[0]);
+                final int y1 = px(o, "y1", "ny1", dz[1]);
+                final int x2 = px(o, "x2", "nx2", dz[0]);
+                final int y2 = px(o, "y2", "ny2", dz[1]);
                 boolean ok = svc.onMain(new Callable<Boolean>() {
                     public Boolean call() {
                         return svc.swipe(x1, y1, x2, y2, 320);
