@@ -517,6 +517,23 @@ public class YuniAgent {
         svc.subtitleEnd(7000);
     }
 
+    String[] doTap(final int x, final int y, String label) throws Exception {
+        String before = svc.onMain(new Callable<String>() {
+            public String call() {
+                return svc.frameSig();
+            }
+        }, "");
+        boolean ok = svc.onMain(new Callable<Boolean>() {
+            public Boolean call() {
+                return svc.tap(x, y);
+            }
+        }, false);
+        if (!ok) return new String[]{label + " (" + x + "," + y + ")", "失败：系统没接受"};
+        String v = svc.verifyChange(before);
+        if ("same".equals(v)) return new String[]{label + " (" + x + "," + y + ")", "没反应：画面没变，可能偏了"};
+        return new String[]{label + " (" + x + "," + y + ")", "ok"};
+    }
+
     static int px(JSONObject o, String k, String nk, int full) {
         if (o.has(nk)) return (int) (o.optDouble(nk, 0) / 1000.0 * full);
         return o.optInt(k);
@@ -620,7 +637,9 @@ public class YuniAgent {
             s.append("- input {text}：往当前输入框里填字\n");
             s.append("- enter：对输入框按回车/搜索键\n");
             s.append("- swipe {x1,y1,x2,y2}：滑动（往下翻页 = 从下往上滑）\n");
-            s.append("- long_press {x,y,ms}：长按 ms 毫秒\n");
+            s.append("- zone {z}：点一个区域，z 取 lt/ct/rt（上）、lm/cm/rm（中）、lb/cb/rb（下），左/中/右、上/中/下。适合找摇杆（一般在 lb）、视角按钮（一般在 rb）、菜单（一般在 lt）。\n");
+            s.append("- saved {name}：点你之前记住的位置\n");
+            s.append("- remember {name,z} 或 {name,nx,ny}：把一个位置记下来，以后直接用 saved。游戏里找到摇杆、视角键后用它记下，之后就不用每次猜。\n");
             s.append("- drag {x1,y1,x2,y2,ms}：按住从起点拖到终点，再继续按住直到 ms 结束（游戏里推摇杆、蓄力）\n");
             s.append("- multi {strokes:[{x1,y1,x2,y2,ms},...]}：多根手指同时按（比如左手推摇杆、右手滑动转视角）\n");
             s.append("- 点击的优先级：能读到文字的按钮（菜单、Play、Settings、确定、开始）一律用 tap_text；画面里的图标或游戏自绘的东西，才用比例坐标 tap {nx,ny}，而且必须先在截图上估准位置，别随便点。点击后如果画面没变，说明点偏了，换一个位置再试，不要重复点同一个地方超过两次。\n");
@@ -639,7 +658,9 @@ public class YuniAgent {
             s.append("5. 看不清、拿不准，或涉及付款、转账、密码、验证码、删除、给别人发消息，先问对方，等对方同意再做。\n");
             s.append("6. 锁 APP 由你自己决定，必须带 reason，理由要真实，只能是：对方连续用某个管控应用太久（看【对方的手机使用情况】）；对方很久没找你，却一直在刷手机。锁多久你定，别超过 60 分钟。你说的话里要当面讲清楚为什么锁；对方生气或求饶时你可以心软，用 unlock 解开。\n");
             s.append("7. 遇到弹窗、广告、权限框，先关掉再继续；点了没反应就换种方式（tap_text 换成 tap 坐标，或先滑动找一下），同一个动作别重复超过两次。\n");
-            s.append("8. 界面读不到文字（多半是游戏）时，靠截图判断、用比例坐标；推摇杆用 drag，左手摇杆右手转视角用 multi；一轮里可以连着写多个动作（最多 8 个），每步的话要短。\n");
+            String spotsTxt = sp.getString("spots", "{}");
+            if (!"{}".equals(spotsTxt)) s.append("已经记住的位置（用 saved 点）：").append(spotsTxt).append("\n");
+            s.append("8. 界面读不到文字（多半是游戏）时，先用 zone 点大致区域，再用 remember 记下位置，之后用 saved；推摇杆用 drag，左手摇杆右手转视角用 multi；一轮里可以连着写多个动作（最多 8 个），每步的话要短。\n");
             if (sp.getBoolean("opt_ask", true)) s.append("9. 想长期管对方的某个应用（比如游戏、刷视频的），不能直接动手，要先用 ask 申请，理由要真实（看【对方的手机使用情况】）；对方同意后才算数，被拒绝就别再纠缠。\n");
             int[] ssz = svc.screenSize();
             s.append("当前屏幕 ").append(ssz[0]).append("×").append(ssz[1]).append(" 像素。\n");
@@ -801,6 +822,48 @@ public class YuniAgent {
                     }
                 }, false);
                 return new String[]{"回车", ok ? "ok" : "失败：请改点「搜索」按钮"};
+            }
+            if ("zone".equals(a)) {
+                // 区域点击：lt/ct/rt（上）lm/cm/rm（中）lb/cb/rb（下），自动换算成屏幕坐标
+                int[] dz = svc.screenSize();
+                String z = o.optString("z", "cm");
+                int col = z.indexOf('l') >= 0 ? 0 : (z.indexOf('r') >= 0 ? 2 : 1);
+                int row = z.indexOf('t') >= 0 ? 0 : (z.indexOf('b') >= 0 ? 2 : 1);
+                final int x = (int) ((col + 0.5) * dz[0] / 3.0);
+                final int y = (int) ((row + 0.5) * dz[1] / 3.0);
+                return doTap(x, y, "区域 " + z);
+            }
+            if ("saved".equals(a)) {
+                // 点一个你之前记住的位置（比如摇杆中心、视角按钮）
+                String key = o.optString("name", "");
+                JSONObject sv = new JSONObject(sp.getString("spots", "{}"));
+                if (!sv.has(key)) return new String[]{"点已记住的 " + key, "失败：还没记住这个位置"};
+                JSONObject pt = sv.getJSONObject(key);
+                return doTap(pt.optInt("x"), pt.optInt("y"), "已记住的 " + key);
+            }
+            if ("remember".equals(a)) {
+                // 记住一个位置：要么给 z（区域中心），要么给 nx/ny
+                String key = o.optString("name", "").trim();
+                if (key.length() == 0) return new String[]{"记住位置", "失败：要起个名字"};
+                int[] dz = svc.screenSize();
+                int x, y;
+                if (o.has("z")) {
+                    String z = o.optString("z", "cm");
+                    int col = z.indexOf('l') >= 0 ? 0 : (z.indexOf('r') >= 0 ? 2 : 1);
+                    int row = z.indexOf('t') >= 0 ? 0 : (z.indexOf('b') >= 0 ? 2 : 1);
+                    x = (int) ((col + 0.5) * dz[0] / 3.0);
+                    y = (int) ((row + 0.5) * dz[1] / 3.0);
+                } else {
+                    x = px(o, "x", "nx", dz[0]);
+                    y = px(o, "y", "ny", dz[1]);
+                }
+                JSONObject sv = new JSONObject(sp.getString("spots", "{}"));
+                JSONObject pt = new JSONObject();
+                pt.put("x", x);
+                pt.put("y", y);
+                sv.put(key, pt);
+                sp.edit().putString("spots", sv.toString()).apply();
+                return new String[]{"记住「" + key + "」", "ok"};
             }
             if ("long_press".equals(a) || "drag".equals(a) || "multi".equals(a)) {
                 int[] dz = svc.screenSize();
