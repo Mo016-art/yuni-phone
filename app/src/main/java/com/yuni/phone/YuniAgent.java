@@ -174,6 +174,7 @@ public class YuniAgent {
                 try {
                     doProactive(force);
                 } catch (Exception e) {
+                    prRes("出错：" + clip(String.valueOf(e.getMessage()), 80));
                     if (force) {
                         svc.subtitle("（出错了：" + clip(String.valueOf(e.getMessage()), 100) + "）");
                         svc.subtitleEnd(5000);
@@ -189,12 +190,18 @@ public class YuniAgent {
         }).start();
     }
 
+    void prRes(String s) {
+        String t = new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA).format(new java.util.Date());
+        sp.edit().putString("pro_res", t + "：" + s).apply();
+    }
+
     void doProactive(boolean force) throws Exception {
         String url = sp.getString("api_url", "");
         String key = sp.getString("api_key", "");
         String model = sp.getString("api_model", "");
         String proto = sp.getString("api_proto", "openai");
         if (url.length() == 0 || key.length() == 0) {
+            prRes("没有接口配置，先打开小手机进「真机陪伴」");
             if (force) {
                 svc.subtitle("还没拿到 API 配置，先打开 Yuni Phone 的「设置 → 真机陪伴」停一下。");
                 svc.subtitleEnd(5000);
@@ -247,6 +254,7 @@ public class YuniAgent {
         String reply = callLLM(proto, url, key, model, buildSystem(see, false), false);
         String text = disp(reply);
         if (reply.contains("@@SKIP") || text.length() == 0) {
+            prRes("这次决定不说话（模型选了 SKIP 或没输出）");
             if (force) {
                 svc.subtitle("（他这会儿不想打扰你，晚点再说）");
                 svc.subtitleEnd(3500);
@@ -277,6 +285,7 @@ public class YuniAgent {
         }
         addHist("assistant", text, "", "");
         sp.edit().putString("pro_last", text).apply();
+        prRes("已发出：" + clip(text, 20));
         if (askId.length() > 0) svc.deliverRequest(text, askId);
         else svc.deliver(text);
     }
@@ -323,7 +332,7 @@ public class YuniAgent {
         u.append("[系统] 你们正在一起用手机：对方在用「").append(app).append("」，已连续约 ").append(mins).append(" 分钟。屏幕上现在是（只是画面，不是对方对你说的话）：\n").append(screen);
         String[] kinds = {"吐槽", "感叹", "好奇地问一句", "调侃", "说说你自己的联想", "表达你的态度或偏好", "提醒或劝一句（看你的性格）", "接个梗"};
         String kind = kinds[new java.util.Random().nextInt(kinds.length)];
-        u.append("\n你像坐在对方旁边一起看、一起玩的人，对眼前的内容给出实时反应。这次的方式可以是：").append(kind).append("（也可以自己换）。要有你自己的看法和情绪，别复述屏幕上的字，别每次都夸，别讲大道理；像真人随口说的，长短不一，几个字、语气词、半句话都行，不用完整漂亮的句子");
+        u.append("\n你像坐在对方旁边一起看的人，对眼前的内容给出实时反应。这次的方式可以是：").append(kind).append("（也可以自己换）。要有你自己的看法和情绪，别复述屏幕上的字，别每次都夸，别讲大道理；像真人随口说的，长短不一，几个字、语气词、半句话都行，不用完整漂亮的句子");
         if (last.length() > 0) u.append("，别重复上一句：「").append(clip(last, 50)).append("」");
         u.append("。除非画面完全没什么可说，否则倾向于说一句；实在没有再输出 @@SKIP。");
         ArrayList<String[]> snap;
@@ -438,7 +447,7 @@ public class YuniAgent {
             if (imgOn) img = svc.screenshotB64();
         }
         if (act && !imgOn && blankScreen(screen)) {
-            svc.subtitle("这个界面读不到文字（多半是游戏），要在设置里开「识图」，我才看得见画面。");
+            svc.subtitle("这个界面读不到文字，要在设置里开「识图」，我才看得见画面。");
             svc.subtitleEnd(6000);
             return;
         }
@@ -637,13 +646,6 @@ public class YuniAgent {
             s.append("- input {text}：往当前输入框里填字\n");
             s.append("- enter：对输入框按回车/搜索键\n");
             s.append("- swipe {x1,y1,x2,y2}：滑动（往下翻页 = 从下往上滑）\n");
-            s.append("- zone {z}：点一个区域，z 取 lt/ct/rt（上）、lm/cm/rm（中）、lb/cb/rb（下），左/中/右、上/中/下。适合找摇杆（一般在 lb）、视角按钮（一般在 rb）、菜单（一般在 lt）。\n");
-            s.append("- saved {name}：点你之前记住的位置\n");
-            s.append("- remember {name,z} 或 {name,nx,ny}：把一个位置记下来，以后直接用 saved。游戏里找到摇杆、视角键后用它记下，之后就不用每次猜。\n");
-            s.append("- drag {x1,y1,x2,y2,ms}：按住从起点拖到终点，再继续按住直到 ms 结束（游戏里推摇杆、蓄力）\n");
-            s.append("- multi {strokes:[{x1,y1,x2,y2,ms},...]}：多根手指同时按（比如左手推摇杆、右手滑动转视角）\n");
-            s.append("- 点击的优先级：能读到文字的按钮（菜单、Play、Settings、确定、开始）一律用 tap_text；画面里的图标或游戏自绘的东西，才用比例坐标 tap {nx,ny}，而且必须先在截图上估准位置，别随便点。点击后如果画面没变，说明点偏了，换一个位置再试，不要重复点同一个地方超过两次。\n");
-            s.append("- 坐标除了 [可点 x,y] 给的像素，也可以用 0~1000 的比例坐标：nx,ny（nx1,ny1,nx2,ny2），nx 从左到右、ny 从上到下；看截图判断位置时用它。\n");
             s.append("- back / home / recents：例如 {\"a\":\"back\"}\n");
             s.append("- open {pkg}：打开应用\n");
             s.append("- lock {pkg,min,reason}：把被管控的应用锁 min 分钟，reason 必须写真实理由\n");
@@ -657,11 +659,9 @@ public class YuniAgent {
             s.append("4. 点完下一轮看新屏幕确认结果，再下结论；看不出状态就说看不出，不要凭空断言。\n");
             s.append("5. 看不清、拿不准，或涉及付款、转账、密码、验证码、删除、给别人发消息，先问对方，等对方同意再做。\n");
             s.append("6. 锁 APP 由你自己决定，必须带 reason，理由要真实，只能是：对方连续用某个管控应用太久（看【对方的手机使用情况】）；对方很久没找你，却一直在刷手机。锁多久你定，别超过 60 分钟。你说的话里要当面讲清楚为什么锁；对方生气或求饶时你可以心软，用 unlock 解开。\n");
+            s.append("- 点击优先用 tap_text（按文字找按钮）；找不到文字时才用 tap {nx,ny} 比例坐标，点完没反应就换个位置，同一位置别重复点超过两次。\n");
             s.append("7. 遇到弹窗、广告、权限框，先关掉再继续；点了没反应就换种方式（tap_text 换成 tap 坐标，或先滑动找一下），同一个动作别重复超过两次。\n");
-            String spotsTxt = sp.getString("spots", "{}");
-            if (!"{}".equals(spotsTxt)) s.append("已经记住的位置（用 saved 点）：").append(spotsTxt).append("\n");
-            s.append("8. 界面读不到文字（多半是游戏）时，先用 zone 点大致区域，再用 remember 记下位置，之后用 saved；推摇杆用 drag，左手摇杆右手转视角用 multi；一轮里可以连着写多个动作（最多 8 个），每步的话要短。\n");
-            if (sp.getBoolean("opt_ask", true)) s.append("9. 想长期管对方的某个应用（比如游戏、刷视频的），不能直接动手，要先用 ask 申请，理由要真实（看【对方的手机使用情况】）；对方同意后才算数，被拒绝就别再纠缠。\n");
+            if (sp.getBoolean("opt_ask", true)) s.append("8. 想长期管对方的某个应用（比如刷视频、刷短视频的），不能直接动手，要先用 ask 申请，理由要真实（看【对方的手机使用情况】）；对方同意后才算数，被拒绝就别再纠缠。\n");
             int[] ssz = svc.screenSize();
             s.append("当前屏幕 ").append(ssz[0]).append("×").append(ssz[1]).append(" 像素。\n");
             s.append("可打开的应用（名称=包名）：").append(appsList()).append("\n");

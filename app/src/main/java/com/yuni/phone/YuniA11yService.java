@@ -163,6 +163,13 @@ public class YuniA11yService extends AccessibilityService {
         super.onServiceConnected();
         inst = this;
         wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+        if (Build.VERSION.SDK_INT >= 26) {
+            try {
+                ((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE)).createNotificationChannel(
+                    new NotificationChannel("char_msg", "char 的消息", NotificationManager.IMPORTANCE_HIGH));
+            } catch (Exception e) {
+            }
+        }
         agent = new YuniAgent(this);
         SharedPreferences p = sp();
         if (p.getBoolean("ball_on", false) && p.getBoolean("auto", true)) showBall();
@@ -310,11 +317,6 @@ public class YuniA11yService extends AccessibilityService {
         scheduleProactive();
         if (agent == null || agent.isRunning()) return;
         SharedPreferences p = sp();
-        int hr = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
-        int qs = p.getInt("pro_qs", 23);
-        int qe = p.getInt("pro_qe", 8);
-        boolean quiet = qs == qe ? false : (qs > qe ? (hr >= qs || hr < qe) : (hr >= qs && hr < qe));
-        if (quiet) return;
         if (p.getBoolean("pro_screen", true)) {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (pm != null && !pm.isInteractive()) return;
@@ -1089,7 +1091,9 @@ public class YuniA11yService extends AccessibilityService {
         TextView t = new TextView(this);
         t.setTextColor(Color.parseColor("#3A2F3D"));
         t.setTextSize(13f);
-        t.setMaxWidth(Math.max(dp(120), Math.min(dp(210), space - dp(10))));
+        t.setMaxWidth(dm.widthPixels - dp(48));
+        t.setGravity(Gravity.CENTER_HORIZONTAL);
+        t.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         t.setMaxLines(10);
         t.setLineSpacing(0f, 1.12f);
         t.setPadding(dp(11), dp(8), dp(11), dp(8));
@@ -1102,10 +1106,9 @@ public class YuniA11yService extends AccessibilityService {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT);
-        boolean low = by > dm.heightPixels * 0.62f;
-        lp.gravity = (low ? Gravity.BOTTOM : Gravity.TOP) | (right ? Gravity.END : Gravity.START);
-        lp.x = right ? dm.widthPixels - bx + dp(6) : bx + size + dp(6);
-        lp.y = low ? dm.heightPixels - (by + size) : by;
+        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        lp.x = 0;
+        lp.y = dp(56);
         blur(lp);
         try {
             wm.addView(t, lp);

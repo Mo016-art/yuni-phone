@@ -216,6 +216,8 @@ public class MainActivity extends Activity {
             NotificationManager nmg = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             o.put("notif", nmg != null && nmg.areNotificationsEnabled());
             o.put("pro", sp().getBoolean("pro_on", false));
+            o.put("proRes", sp().getString("pro_res", "还没尝试过"));
+            o.put("notifBlock", !(nmg != null && nmg.areNotificationsEnabled()));
             o.put("usage", hasUsage());
             o.put("co", sp().getBoolean("co_on", false));
             o.put("autolock", sp().getBoolean("opt_autolock", false));
