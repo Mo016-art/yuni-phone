@@ -402,6 +402,26 @@ public class YuniAgent {
             return;
         }
         svc.subtitle("…");
+        if (act && !sp.getBoolean("gesture_ok", false) && !sp.getBoolean("gesture_bad", false)) {
+            svc.subtitle("先试一下能不能在这个界面上滑动……");
+            int[] dz0 = svc.screenSize();
+            int cx = dz0[0] / 2, cy = dz0[1] / 2;
+            String sb0 = svc.frameSig();
+            svc.onMain(new Callable<Boolean>() {
+                public Boolean call() {
+                    return svc.swipe(cx, cy + dz0[1] / 6, cx, cy - dz0[1] / 6, 300);
+                }
+            }, false);
+            String v0 = svc.verifyChange(sb0);
+            if ("changed".equals(v0)) {
+                sp.edit().putBoolean("gesture_ok", true).apply();
+            } else if ("same".equals(v0)) {
+                sp.edit().putBoolean("gesture_bad", true).apply();
+                svc.subtitle("我试了滑动，画面没有任何变化。这个界面可能不接受系统手势（很多游戏都这样），我没法替你玩。要不要换个能用的操作方式？");
+                svc.subtitleEnd(9000);
+                return;
+            }
+        }
         String screen = "";
         String img = "";
         if (see || act) {
@@ -781,6 +801,11 @@ public class YuniAgent {
                 final int[][] sa = st.toArray(new int[0][]);
                 int total = 0;
                 for (int[] s0 : sa) total = Math.max(total, s0[4]);
+                String before = svc.onMain(new Callable<String>() {
+                    public String call() {
+                        return svc.frameSig();
+                    }
+                }, "");
                 boolean ok = svc.onMain(new Callable<Boolean>() {
                     public Boolean call() {
                         return svc.gesture(sa);
@@ -788,7 +813,10 @@ public class YuniAgent {
                 }, false);
                 if (ok) Thread.sleep(Math.min(8300, total + 150));
                 String nm = "long_press".equals(a) ? "长按" : ("drag".equals(a) ? "按住拖动" : "多指操作");
-                return new String[]{nm, ok ? "ok" : "失败"};
+                if (!ok) return new String[]{nm, "失败：系统没接受这个手势"};
+                String v = svc.verifyChange(before);
+                if ("same".equals(v)) return new String[]{nm, "没反应：画面没变，这个游戏可能不接受系统手势"};
+                return new String[]{nm, "ok"};
             }
             if ("swipe".equals(a)) {
                 int[] dz = svc.screenSize();

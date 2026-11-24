@@ -1191,6 +1191,37 @@ public class YuniA11yService extends AccessibilityService {
     }
 
     // 多指手势：每根手指 {x1,y1,x2,y2,ms}。先移动到终点，再按住到 ms 结束（推摇杆、蓄力、长按）
+
+    // ---------- 画面变化校验：动作派发后，看屏幕是不是真的变了 ----------
+    String frameSig() {
+        AccessibilityNodeInfo r = getRootInActiveWindow();
+        if (r == null) return "";
+        StringBuilder sb = new StringBuilder();
+        sigWalk(r, sb, 0);
+        return sb.toString();
+    }
+
+    void sigWalk(AccessibilityNodeInfo n, StringBuilder sb, int d) {
+        if (n == null || d > 12 || sb.length() > 1500) return;
+        CharSequence t = n.getText();
+        if (t != null && t.length() > 0) sb.append(t).append('|');
+        Rect r = new Rect();
+        n.getBoundsInScreen(r);
+        sb.append(r.left).append(',').append(r.top).append(';');
+        for (int i = 0; i < n.getChildCount(); i++) sigWalk(n.getChild(i), sb, d + 1);
+    }
+
+    // 派发后等 600ms 再比对；返回 "changed" / "same" / "unknown"（读不到界面，只能靠截图判断）
+    String verifyChange(String before) {
+        try {
+            Thread.sleep(600);
+        } catch (InterruptedException e) {
+        }
+        String after = frameSig();
+        if (before.length() == 0 || after.length() == 0) return "unknown";
+        return before.equals(after) ? "same" : "changed";
+    }
+
     public boolean gesture(int[][] st) {
         if (st == null || st.length == 0 || blockedNow()) return false;
         try {
