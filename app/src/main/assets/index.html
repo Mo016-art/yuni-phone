@@ -50555,5 +50555,66 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
 
 })();
 </script>
+<script>
+/* MCP 接入主聊天（OpenAI 兼容的原生函数调用）：
+   主聊天请求里带上该 char 已开启的工具 → 模型返回 tool_calls → 原生执行 → 结果回填 → 再请求，直到模型给出正文。
+   只对带「活人感」标记的主聊天请求生效；不支持工具的接口自动退回普通请求。回滚：window.YP_NO_MCP = true */
+(function () {
+  if (window.__ypMcpFetch || !window.fetch) return;
+  window.__ypMcpFetch = true;
+  var realFetch = window.fetch.bind(window);
+  function bridge(m, a) {
+    return new Promise(function (res) {
+      if (typeof NT === 'undefined' || !NT || !NT.call) { res(null); return; }
+      NT.call(m, a).then(res);
+    });
+  }
+  function sseOf(text) {
+    return 'data: ' + JSON.stringify({ choices: [{ delta: { content: text } }] }) + '\n\ndata: [DONE]\n\n';
+  }
+  window.fetch = async function (input, init) {
+    var url = typeof input === 'string' ? input : ((input && input.url) || '');
+    var body = init && init.body;
+    if (window.YP_NO_MCP || !/\/chat\/completions/.test(url) || typeof body !== 'string' || body.indexOf('【活人感') < 0) {
+      return realFetch.apply(this, arguments);
+    }
+    var cid = (typeof cid0 === 'function') ? (cid0() || '') : '';
+    var tools = await bridge('mcpTools', { charId: cid });
+    if (!Array.isArray(tools) || !tools.length) return realFetch.apply(this, arguments);
+    var req;
+    try { req = JSON.parse(body); } catch (e) { return realFetch.apply(this, arguments); }
+    var wantStream = !!req.stream;
+    var msgs = (req.messages || []).slice();
+    var text = null;
+    for (var step = 0; step < 4; step++) {
+      var r = await realFetch(url, {
+        method: 'POST',
+        headers: init.headers,
+        body: JSON.stringify({ model: req.model, messages: msgs, tools: tools,
+          temperature: req.temperature, max_tokens: req.max_tokens, stream: false })
+      });
+      if (!r.ok) {
+        if (step === 0) return realFetch.apply(this, arguments);   /* 接口不认工具：退回普通请求 */
+        break;
+      }
+      var j = await r.json();
+      var m = j.choices && j.choices[0] && j.choices[0].message;
+      if (!m) break;
+      if (!m.tool_calls || !m.tool_calls.length) { text = m.content || ''; break; }
+      msgs.push({ role: 'assistant', content: m.content || '', tool_calls: m.tool_calls });
+      for (var i = 0; i < m.tool_calls.length; i++) {
+        var tc = m.tool_calls[i], args = {};
+        try { args = JSON.parse((tc.function && tc.function.arguments) || '{}'); } catch (e) {}
+        var out = await bridge('mcpCallFull', { name: tc.function.name, args: args, charId: cid });
+        msgs.push({ role: 'tool', tool_call_id: tc.id, content: String(out || '（工具没有返回内容）') });
+      }
+    }
+    if (text === null) return realFetch.apply(this, arguments);
+    if (wantStream) return new Response(sseOf(text), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: text }, finish_reason: 'stop' }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+})();
+</script>
 </body>
 </html>
