@@ -39268,7 +39268,7 @@ function ntMcpDiag() {
       return new Date(x.t).toLocaleTimeString() + ' · ' + (x.hit ? '命中' : '未命中') + ' · char「' + (x.name || '无') + '」' + (x.tools !== undefined ? ' · 工具 ' + x.tools : '') + ' · ' + (x.url || '');
     }).join('<br>') || '还没有拦截到任何聊天请求';
     var nat = '<div style="margin-top:8px"><b>原生最近一次进入工具列表：</b>' + (d.start ? new Date(Number(d.start)).toLocaleTimeString() : '从未进入') + '</div>' +
-      '<div><b>原生最近错误：</b>' + esc2(d.err || '无') + '</div>';
+      '<div><b>原生最近错误：</b>' + esc2(d.err || '无') + '</div><div><b>原生版本：</b>' + esc2(d.ver || '旧版（没有版本号，说明装的还是旧 apk）') + '</div>';
     e2.innerHTML = '<div><b>最近一次带工具给模型：</b>' + esc2(tl) + '</div><div style="margin-top:6px"><b>最近一次工具调用：</b>' + esc2(cl) + '</div>' + nat +
       '<div style="margin-top:8px"><b>最近的聊天请求（最多 6 条）：</b><br>' + lgTxt + '</div>';
   });
@@ -50587,6 +50587,35 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
       NT.call(m, a).then(res);
     });
   }
+  function mcpSan(s) { return String(s || '').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40); }
+  function mcpFullName(a, b) { return (mcpSan(a) + '__' + mcpSan(b)).slice(0, 64); }
+  function scopeOk(sv, cid) { return !sv.scope || sv.scope === 'all' || sv.scope === cid; }
+  function toolsFromPage(cid) {
+    var out = [];
+    (window.ntMcp || []).forEach(function (sv) {
+      if (!sv || sv.enabled === false || !scopeOk(sv, cid)) return;
+      (sv.tools || []).forEach(function (t) {
+        if (!t || !t.enabled) return;
+        out.push({ type: 'function', function: { name: mcpFullName(sv.name, t.name),
+          description: String(t.description || '').slice(0, 300),
+          parameters: t.inputSchema || { type: 'object', properties: {} } } });
+      });
+    });
+    return out.slice(0, 40);
+  }
+  async function callMcpTool(fullName, args, cid) {
+    var found = null;
+    (window.ntMcp || []).forEach(function (sv) {
+      if (found || !sv || sv.enabled === false || !scopeOk(sv, cid)) return;
+      (sv.tools || []).forEach(function (t) {
+        if (!found && t && t.enabled && mcpFullName(sv.name, t.name) === fullName) found = { sv: sv, t: t };
+      });
+    });
+    if (!found) return '这个工具没有开启或不适用于当前 char';
+    var r = await bridge('mcpCallDirect', { url: found.sv.url, hdr: found.sv.hdr || '', val: found.sv.val || '',
+      transport: found.sv.transport || 'http', tool: found.t.name, args: args || {} });
+    return (r === null || r === undefined) ? '工具没有返回（网络或原生错误）' : String(r);
+  }
   function sseOpenAI(text) {
     return 'data: ' + JSON.stringify({ choices: [{ delta: { content: text } }] }) + '\n\ndata: [DONE]\n\n';
   }
@@ -50625,8 +50654,11 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
     var req;
     try { req = JSON.parse(body); } catch (e) { return realFetch.apply(this, arguments); }
     var cid = (typeof cid0 === 'function') ? (cid0() || '') : '';
-    var oaTools = await bridge('mcpTools', { charId: cid });
-    logIt({ url: url.slice(-40), hit: true, name: nm, cid: cid, tools: Array.isArray(oaTools) ? oaTools.length : ('非数组:' + (oaTools === null ? 'null（桥接没回应）' : typeof oaTools)) });
+    if (!window.ntMcp || !window.ntMcp.length) {
+      try { var lst = await bridge('mcpList', {}); if (Array.isArray(lst)) window.ntMcp = lst; } catch (eL) {}
+    }
+    var oaTools = toolsFromPage(cid);
+    logIt({ url: url.slice(-40), hit: true, name: nm, cid: cid, tools: oaTools.length });
     if (!Array.isArray(oaTools) || !oaTools.length) return realFetch.apply(this, arguments);
     var tools = isCl
       ? oaTools.map(function (t) { return { name: t.function.name, description: t.function.description || '', input_schema: t.function.parameters || { type: 'object', properties: {} } }; })
@@ -50653,7 +50685,7 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
         msgs.push({ role: 'assistant', content: blocks });
         var results = [];
         for (var u = 0; u < uses.length; u++) {
-          var outC = await bridge('mcpCallFull', { name: uses[u].name, args: uses[u].input || {}, charId: cid });
+          var outC = await callMcpTool(uses[u].name, uses[u].input || {}, cid);
           results.push({ type: 'tool_result', tool_use_id: uses[u].id, content: String(outC || '（工具没有返回内容）') });
         }
         msgs.push({ role: 'user', content: results });
@@ -50665,7 +50697,7 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
         for (var i = 0; i < mm.tool_calls.length; i++) {
           var tc = mm.tool_calls[i], args = {};
           try { args = JSON.parse((tc.function && tc.function.arguments) || '{}'); } catch (e) {}
-          var out = await bridge('mcpCallFull', { name: tc.function.name, args: args, charId: cid });
+          var out = await callMcpTool(tc.function.name, args, cid);
           msgs.push({ role: 'tool', tool_call_id: tc.id, content: String(out || '（工具没有返回内容）') });
         }
       }
