@@ -538,7 +538,12 @@ public class MainActivity extends Activity {
                     out.put(new JSONObject().put("type", "function").put("function", fn));
                 }
             }
+            sp().edit().putString("diag_tools", new JSONObject().put("t", System.currentTimeMillis())
+                .put("n", out.length()).put("cid", cid).toString()).apply();
             return out.toString();
+        }
+        if ("mcpDiag".equals(mm)) {
+            return "{\"tools\":" + sp().getString("diag_tools", "null") + ",\"call\":" + sp().getString("diag_call", "null") + "}";
         }
         if ("mcpCallFull".equals(mm)) {
             String full = a.optString("name");
@@ -556,9 +561,17 @@ public class MainActivity extends Activity {
                     if (t == null || !t.optBoolean("enabled", false)) continue;
                     if (!full.equals(McpNames.full(s.optString("name"), t.optString("name")))) continue;
                     JSONObject args = a.optJSONObject("args");
-                    String res = McpClient.callTool(s.optString("url"), s.optString("hdr", ""), s.optString("val", ""),
-                        s.optString("transport", "http"), t.optString("name"), args == null ? new JSONObject() : args);
-                    return JSONObject.quote(McpNames.clip(res, 4000));
+                    try {
+                        String res = McpClient.callTool(s.optString("url"), s.optString("hdr", ""), s.optString("val", ""),
+                            s.optString("transport", "http"), t.optString("name"), args == null ? new JSONObject() : args);
+                        sp().edit().putString("diag_call", new JSONObject().put("t", System.currentTimeMillis())
+                            .put("name", full).put("ok", true).put("len", res.length()).toString()).apply();
+                        return JSONObject.quote(McpNames.clip(res, 4000));
+                    } catch (Exception ex) {
+                        sp().edit().putString("diag_call", new JSONObject().put("t", System.currentTimeMillis())
+                            .put("name", full).put("ok", false).put("err", McpNames.clip(String.valueOf(ex.getMessage()), 120)).toString()).apply();
+                        return JSONObject.quote("工具出错：" + ex.getMessage());
+                    }
                 }
             }
             return JSONObject.quote("没有找到这个工具，或者它没有开启");
