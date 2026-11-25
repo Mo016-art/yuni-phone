@@ -39112,6 +39112,8 @@ function ntMcpReadForm() {
   d.kind = $('#ntMcpKind').value;
   d.token = ($('#ntMcpToken').value || '').trim();
   d.scope = $('#ntMcpScope').value;
+  d.transport = $('#ntMcpTrans').value;
+  d.keywords = ($('#ntMcpKw').value || '').trim();
   ntMcpDraft = d;
   return d;
 }
@@ -39124,6 +39126,8 @@ function ntMcpFillForm(d) {
   $('#ntMcpName').value = d.name || ''; $('#ntMcpUrl').value = d.url || '';
   $('#ntMcpKind').value = d.kind || 'bearer'; $('#ntMcpToken').value = d.token || '';
   $('#ntMcpScope').value = d.scope || 'all';
+  $('#ntMcpTrans').value = d.transport || 'http';
+  if ($('#ntMcpKw')) $('#ntMcpKw').value = d.keywords || '';
 }
 function ntMcpRenderDraft() {
   var box = $('#ntMcpDraft'); if (!box) return;
@@ -39139,7 +39143,7 @@ function ntMcpTest() {
   if (!d.url) { setToast('先填地址'); return; }
   setToast('正在连接…');
   var h = ntMcpHeader(d);
-  NT.call('mcpTest', { url: d.url, hdr: h.hdr, val: h.val }).then(function (r) {
+  NT.call('mcpTest', { url: d.url, hdr: h.hdr, val: h.val, transport: d.transport || 'http' }).then(function (r) {
     if (!r || !r.ok) { setToast('连接失败：' + String((r && r.error) || '没有响应').slice(0, 60)); return; }
     var old = {}; (d.tools || []).forEach(function (t) { old[t.name] = t.enabled; });
     d.tools = (r.tools || []).map(function (t) {
@@ -39154,7 +39158,7 @@ function ntMcpSave() {
   if (!d.name || !d.url) { setToast('名称和地址要填'); return; }
   var h = ntMcpHeader(d);
   var scope = d.scope === 'cur' ? (ntCfg().charId || 'all') : 'all';
-  var rec = { name: d.name, url: d.url, kind: d.kind, token: d.token, hdr: h.hdr, val: h.val, enabled: d.enabled !== false, scope: scope, tools: d.tools || [] };
+  var rec = { name: d.name, url: d.url, kind: d.kind, token: d.token, hdr: h.hdr, val: h.val, enabled: d.enabled !== false, scope: scope, transport: d.transport || 'http', keywords: d.keywords || '', tools: d.tools || [] };
   if (ntMcpEdit >= 0) ntMcp[ntMcpEdit] = rec; else ntMcp.push(rec);
   ntMcpStore().then(function () {
     setToast('已保存');
@@ -39164,7 +39168,7 @@ function ntMcpSave() {
 function ntMcpEditAt(i) {
   var sv = ntMcp[i]; if (!sv) return;
   ntMcpEdit = i;
-  ntMcpDraft = { name: sv.name, url: sv.url, kind: sv.kind || 'bearer', token: sv.token || '', scope: (sv.scope && sv.scope !== 'all') ? 'cur' : 'all', enabled: sv.enabled !== false, tools: (sv.tools || []).slice() };
+  ntMcpDraft = { name: sv.name, url: sv.url, kind: sv.kind || 'bearer', token: sv.token || '', transport: sv.transport || 'http', keywords: sv.keywords || '', scope: (sv.scope && sv.scope !== 'all') ? 'cur' : 'all', enabled: sv.enabled !== false, tools: (sv.tools || []).slice() };
   ntMcpFillForm(ntMcpDraft); ntMcpRenderDraft();
 }
 function ntMcpNew() {
@@ -39199,6 +39203,8 @@ function renderMcp() {
         '<input class="set-inp" id="ntMcpName" placeholder="名称，比如「文档查询」" style="margin:4px 0">' +
         '<input class="set-inp" id="ntMcpUrl" placeholder="地址（https://…）" style="margin:4px 0">' +
         '<select class="nt-sel" id="ntMcpKind" style="margin:4px 0;width:100%"><option value="bearer">凭据：Bearer Token</option><option value="apikey">凭据：API Key（x-api-key）</option></select>' +
+        '<select class="nt-sel" id="ntMcpTrans" style="margin:4px 0;width:100%"><option value="http">传输类型：Streamable HTTP（推荐）</option><option value="sse">传输类型：SSE（旧版）</option></select>' +
+        '<input class="set-inp" id="ntMcpKw" placeholder="触发词：说出它就开始用（逗号分隔，留空=服务名）" style="margin:4px 0">' +
         '<input class="set-inp" id="ntMcpToken" placeholder="凭据（没有就留空）" style="margin:4px 0">' +
         '<select class="nt-sel" id="ntMcpScope" style="margin:4px 0;width:100%"><option value="all">使用范围：所有 char</option><option value="cur">使用范围：只给悬浮球里的 char</option></select>' +
         '<div class="nt-btns" style="margin-top:8px"><button class="set-btn ghost" data-nt="mcptest">测试连接</button><button class="set-btn" data-nt="mcpsave">保存</button></div>' +
