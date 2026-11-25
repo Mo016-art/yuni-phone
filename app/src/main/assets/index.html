@@ -50655,12 +50655,14 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
     try { req = JSON.parse(body); } catch (e) { return realFetch.apply(this, arguments); }
     var cid = (typeof cid0 === 'function') ? (cid0() || '') : '';
     /* 每次直接从原生的服务列表取（和设置页存的是同一份），并记下每个服务的状态 */
+    var t0 = Date.now();
     var mlist = await bridge('mcpList', {});
+    var took = Date.now() - t0;
     if (Array.isArray(mlist)) window.ntMcp = mlist;
     var oaTools = toolsFromPage(cid);
     var detail = Array.isArray(mlist) ? mlist.map(function (s) {
       return (s.name || '?') + ':' + (s.enabled !== false ? '启用' : '停用') + ':' + (s.scope || 'all') + ':' + ((s.tools || []).filter(function (x) { return x.enabled; }).length) + '个开';
-    }).join(' | ') : ('列表非数组:' + typeof mlist);
+    }).join(' | ') : ('列表非数组:' + (mlist === null ? 'null' : typeof mlist) + '，耗时' + took + 'ms，桥接' + (window.YuniBridge ? '有' : '无'));
     logIt({ url: url.slice(-40), hit: true, name: nm, cid: cid, tools: oaTools.length, detail: detail });
     if (!Array.isArray(oaTools) || !oaTools.length) return realFetch.apply(this, arguments);
     var tools = isCl
