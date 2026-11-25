@@ -551,8 +551,23 @@ public class MainActivity extends Activity {
             return out.toString();
         }
         if ("mcpDiag".equals(mm)) {
-            return "{\"tools\":" + sp().getString("diag_tools", "null") + ",\"call\":" + sp().getString("diag_call", "null")
+            return "{\"ver\":\"native-26\",\"tools\":" + sp().getString("diag_tools", "null") + ",\"call\":" + sp().getString("diag_call", "null")
                 + ",\"start\":" + JSONObject.quote(sp().getString("diag_start", "")) + ",\"err\":" + JSONObject.quote(sp().getString("diag_err", "")) + "}";
+        }
+        if ("mcpCallDirect".equals(mm)) {
+            String tl = a.optString("tool");
+            try {
+                JSONObject args = a.optJSONObject("args");
+                String res = McpClient.callTool(a.optString("url"), a.optString("hdr", ""), a.optString("val", ""),
+                    a.optString("transport", "http"), tl, args == null ? new JSONObject() : args);
+                sp().edit().putString("diag_call", new JSONObject().put("t", System.currentTimeMillis())
+                    .put("name", tl).put("ok", true).put("len", res.length()).toString()).apply();
+                return JSONObject.quote(McpNames.clip(res, 4000));
+            } catch (Exception ex) {
+                sp().edit().putString("diag_call", new JSONObject().put("t", System.currentTimeMillis())
+                    .put("name", tl).put("ok", false).put("err", McpNames.clip(String.valueOf(ex.getMessage()), 120)).toString()).apply();
+                return JSONObject.quote("工具出错：" + ex.getMessage());
+            }
         }
         if ("mcpCallFull".equals(mm)) {
             String full = a.optString("name");
