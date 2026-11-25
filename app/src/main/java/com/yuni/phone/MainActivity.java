@@ -514,6 +514,55 @@ public class MainActivity extends Activity {
             sp().edit().putString("mcp_servers", a.optString("json", "[]")).apply();
             return "true";
         }
+        if ("mcpTools".equals(mm)) {
+            // 给主聊天用：OpenAI 兼容的 tools 定义，只含该 char 能用、已开启的工具
+            String cid = a.optString("charId", sp().getString("char_id", ""));
+            JSONArray out = new JSONArray();
+            JSONArray arr = new JSONArray(sp().getString("mcp_servers", "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject s = arr.optJSONObject(i);
+                if (s == null || !s.optBoolean("enabled", true)) continue;
+                String sc = s.optString("scope", "all");
+                if (!(sc.equals("all") || sc.equals(cid))) continue;
+                JSONArray ts = s.optJSONArray("tools");
+                if (ts == null) continue;
+                for (int k = 0; k < ts.length(); k++) {
+                    JSONObject t = ts.optJSONObject(k);
+                    if (t == null || !t.optBoolean("enabled", false)) continue;
+                    JSONObject params = t.optJSONObject("inputSchema");
+                    if (params == null) params = new JSONObject().put("type", "object").put("properties", new JSONObject());
+                    JSONObject fn = new JSONObject()
+                        .put("name", McpNames.full(s.optString("name"), t.optString("name")))
+                        .put("description", McpNames.clip(t.optString("description"), 300))
+                        .put("parameters", params);
+                    out.put(new JSONObject().put("type", "function").put("function", fn));
+                }
+            }
+            return out.toString();
+        }
+        if ("mcpCallFull".equals(mm)) {
+            String full = a.optString("name");
+            String cid = a.optString("charId", sp().getString("char_id", ""));
+            JSONArray arr = new JSONArray(sp().getString("mcp_servers", "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject s = arr.optJSONObject(i);
+                if (s == null || !s.optBoolean("enabled", true)) continue;
+                String sc = s.optString("scope", "all");
+                if (!(sc.equals("all") || sc.equals(cid))) continue;
+                JSONArray ts = s.optJSONArray("tools");
+                if (ts == null) continue;
+                for (int k = 0; k < ts.length(); k++) {
+                    JSONObject t = ts.optJSONObject(k);
+                    if (t == null || !t.optBoolean("enabled", false)) continue;
+                    if (!full.equals(McpNames.full(s.optString("name"), t.optString("name")))) continue;
+                    JSONObject args = a.optJSONObject("args");
+                    String res = McpClient.callTool(s.optString("url"), s.optString("hdr", ""), s.optString("val", ""),
+                        s.optString("transport", "http"), t.optString("name"), args == null ? new JSONObject() : args);
+                    return JSONObject.quote(McpNames.clip(res, 4000));
+                }
+            }
+            return JSONObject.quote("没有找到这个工具，或者它没有开启");
+        }
         if ("mcpTest".equals(mm)) {
             JSONObject out = new JSONObject();
             try {
