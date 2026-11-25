@@ -38981,6 +38981,8 @@ function ntBind() {
   bd.onclick = function (e) {
     if (!($('#ntState') || $('#bgState') || $('#mcpState'))) return;
     var t = e.target;
+    var tg = t.closest && t.closest('.mc-tog');
+    if (tg) { ntMcpToggleSrv(tg); return; }
     var mc = t.closest && t.closest('.mcchip');
     if (mc) { ntMcpToggleTool(mc); return; }
     var sw = t.closest && t.closest('.nt-sw');
@@ -39096,7 +39098,10 @@ var MC_CSS = '.mc-h{font-size:12px;letter-spacing:.6px;color:#111;margin:22px 4p
   '.mc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}' +
   '.mcchip{border:1px solid #111;border-radius:12px;padding:9px 6px;font-size:12.5px;text-align:center;color:#111;background:#fff;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
   '.mcchip.on{background:#111;color:#fff}' +
-  '.mc-foot{font-size:12px;color:#111;margin-top:10px;line-height:1.5}';
+  '.mc-foot{font-size:12px;color:#111;margin-top:10px;line-height:1.5}' +
+  '.mc-tog{width:44px;height:24px;border:1px solid #111;border-radius:999px;position:relative;cursor:pointer;background:#fff;flex:none}' +
+  '.mc-tog::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#111;transition:left .15s}' +
+  '.mc-tog.on{background:#111}.mc-tog.on::after{left:23px;background:#fff}';
 function mcInstallCss() {
   if (document.getElementById('mcCss')) return;
   var s = document.createElement('style'); s.id = 'mcCss'; s.textContent = MC_CSS;
@@ -39132,6 +39137,7 @@ function ntMcpRenderList() {
   box.innerHTML = ntMcp.map(function (sv, i) {
     var on = (sv.tools || []).filter(function (x) { return x.enabled; }).length;
     return '<div class="mc-card"><div class="mc-row"><div class="mc-name">' + esc2(sv.name) + '</div>' +
+      '<span class="mc-tog' + (sv.enabled !== false ? ' on' : '') + '" data-srv="' + i + '"></span>' +
       '<span class="mc-btn" data-nt="mcpedit" data-i="' + i + '">编辑</span><span class="mc-btn" data-nt="mcpdel" data-i="' + i + '">删除</span></div>' +
       '<div class="mc-meta">' + (sv.enabled ? '启用' : '停用') + ' · ' + on + ' 个工具开启 · ' + esc2(ntMcpScopeName(sv.scope)) + ' · 约 ' + ntMcpTokens(sv) + ' tokens</div></div>';
   }).join('');
@@ -39229,6 +39235,15 @@ function ntMcpToggleTool(el) {
   if (!ntMcpDraft || !ntMcpDraft.tools[i]) return;
   ntMcpDraft.tools[i].enabled = !ntMcpDraft.tools[i].enabled;
   ntMcpRenderDraft();
+}
+function ntMcpToggleSrv(el) {
+  var i = parseInt(el.getAttribute('data-srv'), 10);
+  if (!ntMcp[i]) return;
+  ntMcp[i].enabled = !(ntMcp[i].enabled !== false);
+  ntMcpStore().then(function () {
+    ntMcpRenderList();
+    setToast(ntMcp[i].enabled ? '已启用这个服务' : '已停用这个服务');
+  });
 }
 function ntMcpAct(act, b) {
   if (act === 'mcptest') ntMcpTest();
@@ -50670,8 +50685,15 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
     var tools = isCl
       ? oaTools.map(function (t) { return { name: t.function.name, description: t.function.description || '', input_schema: t.function.parameters || { type: 'object', properties: {} } }; })
       : oaTools;
-    var wantStream = !!req.stream;
     var msgs = (req.messages || []).slice();
+    var NOTE = '\n\n【可用工具】你可以调用外部工具（比如大富翁、4399 这类服务）。对方让你玩、查、操作这类事时，必须直接调用对应工具，不要用文字假装调用，也不要只说「我先看看规则」而不调用工具。';
+    if (isCl) {
+      if (Array.isArray(req.system)) req.system = req.system.concat([{ type: 'text', text: NOTE }]);
+      else req.system = String(req.system || '') + NOTE;
+    } else if (msgs.length && msgs[0].role === 'system') {
+      msgs[0] = Object.assign({}, msgs[0], { content: String(msgs[0].content || '') + NOTE });
+    }
+    var wantStream = !!req.stream;
     var text = null;
     for (var step = 0; step < 4; step++) {
       var payload = Object.assign({}, req, { messages: msgs, stream: false });
