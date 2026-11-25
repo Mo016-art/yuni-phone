@@ -38980,6 +38980,8 @@ function ntBind() {
   bd.onclick = function (e) {
     if (!($('#ntState') || $('#bgState') || $('#mcpState'))) return;
     var t = e.target;
+    var mc = t.closest && t.closest('.mcchip');
+    if (mc) { ntMcpToggleTool(mc); return; }
     var sw = t.closest && t.closest('.nt-sw');
     if (sw) { if (sw.getAttribute('data-mt') !== null) { ntMcpToggleTool(sw); return; } ntToggle(sw); return; }
     var card = t.closest && t.closest('.nt-card');
@@ -39080,8 +39082,25 @@ function renderBgMsg() {
   goSub('通知与后台消息', html, function () { ntBind(); bgStatus(); });
 }
 
-/* ---------- MCP 服务（远程网址型）：添加 / 测试连接 / 工具开关 / 使用范围 ---------- */
+/* ---------- MCP 服务（远程网址型）：黑白版 ---------- */
 var ntMcp = [], ntMcpDraft = null, ntMcpEdit = -1;
+var MC_CSS = '.mc-h{font-size:12px;letter-spacing:.6px;color:#111;margin:22px 4px 10px;text-transform:uppercase;font-weight:600}' +
+  '.mc-card{background:#fff;border:1px solid #111;border-radius:16px;padding:14px;margin-bottom:10px}' +
+  '.mc-row{display:flex;align-items:center;gap:8px}' +
+  '.mc-name{flex:1;min-width:0;font-size:15px;color:#111;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+  '.mc-meta{font-size:12px;color:#111;margin-top:6px;line-height:1.5}' +
+  '.mc-btn{font-size:12.5px;color:#111;border:1px solid #111;border-radius:999px;padding:4px 12px;cursor:pointer;background:#fff;white-space:nowrap}' +
+  '.mc-btn.fill{background:#111;color:#fff}' +
+  '.mc-in,.mc-sel{width:100%;box-sizing:border-box;border:1px solid #111;border-radius:12px;padding:10px 12px;font-size:14px;background:#fff;color:#111;margin:6px 0;outline:none;-webkit-appearance:none;appearance:none}' +
+  '.mc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}' +
+  '.mcchip{border:1px solid #111;border-radius:12px;padding:9px 6px;font-size:12.5px;text-align:center;color:#111;background:#fff;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+  '.mcchip.on{background:#111;color:#fff}' +
+  '.mc-foot{font-size:12px;color:#111;margin-top:10px;line-height:1.5}';
+function mcInstallCss() {
+  if (document.getElementById('mcCss')) return;
+  var s = document.createElement('style'); s.id = 'mcCss'; s.textContent = MC_CSS;
+  document.head.appendChild(s);
+}
 function ntMcpLoad(cb) {
   NT.call('mcpList').then(function (s) {
     try { ntMcp = (typeof s === 'string' ? JSON.parse(s) : s) || []; } catch (e) { ntMcp = []; }
@@ -39095,25 +39114,47 @@ function ntMcpTokens(d) {
   (d.tools || []).forEach(function (t) { if (t.enabled) n += (String(t.name || '') + String(t.description || '') + JSON.stringify(t.inputSchema || {})).length; });
   return Math.round(n / 3);
 }
+function ntMcpScopeName(id) {
+  if (!id || id === 'all') return '所有 char';
+  var f = ntFriends().find(function (x) { return x.id === id; });
+  return f ? '只给 ' + ntDisp(f) : '指定的 char（已删除）';
+}
+function ntMcpScopeOpts() {
+  var o = '<option value="all">所有 char</option>';
+  ntFriends().forEach(function (f) { o += '<option value="' + esc2(f.id) + '">只给 ' + esc2(ntDisp(f)) + '</option>'; });
+  return o;
+}
 function ntMcpRenderList() {
   var box = $('#ntMcpList'); if (!box) return;
-  if (!ntMcp.length) { box.innerHTML = ntRow('还没有 MCP 服务', '', ''); return; }
+  mcInstallCss();
+  if (!ntMcp.length) { box.innerHTML = '<div class="mc-card"><div class="mc-name">还没有服务</div></div>'; return; }
   box.innerHTML = ntMcp.map(function (sv, i) {
-    var on = (sv.tools || []).filter(function (t) { return t.enabled; }).length;
-    return '<div class="nt-row"><div class="nt-tx"><div class="nt-t">' + esc2(sv.name) + '</div></div>' +
-      '<span class="nt-v">' + on + ' 个工具 · ' + (sv.scope === 'all' ? '所有 char' : '指定 char') + ' · ' + (sv.enabled ? '启用' : '停用') + ' · 约 ' + ntMcpTokens(sv) + ' tokens</span>' +
-      '<span class="nt-act" data-nt="mcpedit" data-i="' + i + '">编辑</span><span class="nt-act" style="color:#E06B6B" data-nt="mcpdel" data-i="' + i + '">删除</span></div>';
+    var on = (sv.tools || []).filter(function (x) { return x.enabled; }).length;
+    return '<div class="mc-card"><div class="mc-row"><div class="mc-name">' + esc2(sv.name) + '</div>' +
+      '<span class="mc-btn" data-nt="mcpedit" data-i="' + i + '">编辑</span><span class="mc-btn" data-nt="mcpdel" data-i="' + i + '">删除</span></div>' +
+      '<div class="mc-meta">' + (sv.enabled ? '启用' : '停用') + ' · ' + on + ' 个工具开启 · ' + esc2(ntMcpScopeName(sv.scope)) + ' · 约 ' + ntMcpTokens(sv) + ' tokens</div></div>';
   }).join('');
 }
+function ntMcpRenderDraft() {
+  var box = $('#ntMcpDraft'); if (!box) return;
+  mcInstallCss();
+  var d = ntMcpDraft;
+  if (!d || !d.tools || !d.tools.length) { box.innerHTML = ''; return; }
+  var chips = d.tools.map(function (t, i) {
+    return '<div class="mcchip' + (t.enabled ? ' on' : '') + '" data-mt="' + i + '" title="' + esc2(String(t.description || '')) + '">' + esc2(t.name) + '</div>';
+  }).join('');
+  box.innerHTML = '<div class="mc-h">工具（点选开启）</div><div class="mc-grid">' + chips + '</div>' +
+    '<div class="mc-foot">开启的工具约 ' + ntMcpTokens(d) + ' tokens。char 用到工具时才消耗。</div>';
+}
 function ntMcpReadForm() {
-  var d = ntMcpDraft || { name: '', url: '', kind: 'bearer', token: '', scope: 'all', enabled: true, tools: [] };
+  var d = ntMcpDraft || { tools: [] };
   d.name = ($('#ntMcpName').value || '').trim();
   d.url = ($('#ntMcpUrl').value || '').trim();
   d.kind = $('#ntMcpKind').value;
   d.token = ($('#ntMcpToken').value || '').trim();
+  d.keywords = ($('#ntMcpKw').value || '').trim();
   d.scope = $('#ntMcpScope').value;
   d.transport = $('#ntMcpTrans').value;
-  d.keywords = ($('#ntMcpKw').value || '').trim();
   ntMcpDraft = d;
   return d;
 }
@@ -39123,20 +39164,13 @@ function ntMcpHeader(d) {
 }
 function ntMcpFillForm(d) {
   if (!$('#ntMcpName')) return;
-  $('#ntMcpName').value = d.name || ''; $('#ntMcpUrl').value = d.url || '';
-  $('#ntMcpKind').value = d.kind || 'bearer'; $('#ntMcpToken').value = d.token || '';
-  $('#ntMcpScope').value = d.scope || 'all';
+  $('#ntMcpName').value = d.name || '';
+  $('#ntMcpUrl').value = d.url || '';
+  $('#ntMcpKind').value = d.kind || 'bearer';
+  $('#ntMcpToken').value = d.token || '';
+  $('#ntMcpKw').value = d.keywords || '';
   $('#ntMcpTrans').value = d.transport || 'http';
-  if ($('#ntMcpKw')) $('#ntMcpKw').value = d.keywords || '';
-}
-function ntMcpRenderDraft() {
-  var box = $('#ntMcpDraft'); if (!box) return;
-  var d = ntMcpDraft; if (!d) { box.innerHTML = ''; return; }
-  var rows = (d.tools || []).map(function (t, i) {
-    return '<div class="nt-row"><div class="nt-tx"><div class="nt-t">' + esc2(t.name) + '</div><div class="nt-d">' + esc2(String(t.description || '').slice(0, 60)) + '</div></div>' +
-      '<span class="nt-sw' + (t.enabled ? ' on' : '') + '" data-mt="' + i + '"></span></div>';
-  }).join('');
-  box.innerHTML = rows + (d.tools && d.tools.length ? '<div class="nt-row"><div class="nt-tx"><div class="nt-t">开启的工具约占 ' + ntMcpTokens(d) + ' tokens（每次 char 用到工具时）</div></div></div>' : '');
+  $('#ntMcpScope').value = d.scope || 'all';
 }
 function ntMcpTest() {
   var d = ntMcpReadForm();
@@ -39145,43 +39179,52 @@ function ntMcpTest() {
   var h = ntMcpHeader(d);
   NT.call('mcpTest', { url: d.url, hdr: h.hdr, val: h.val, transport: d.transport || 'http' }).then(function (r) {
     if (!r || !r.ok) { setToast('连接失败：' + String((r && r.error) || '没有响应').slice(0, 60)); return; }
-    var old = {}; (d.tools || []).forEach(function (t) { old[t.name] = t.enabled; });
+    var old = {};
+    (d.tools || []).forEach(function (t) { old[t.name] = t.enabled; });
     d.tools = (r.tools || []).map(function (t) {
       return { name: t.name, description: t.description || '', inputSchema: t.inputSchema || {}, enabled: !!old[t.name] };
     });
-    ntMcpDraft = d; ntMcpRenderDraft();
-    setToast('连接成功，拿到 ' + d.tools.length + ' 个工具（默认全部关闭，打开你需要的）');
+    ntMcpDraft = d;
+    ntMcpRenderDraft();
+    setToast('连接成功，拿到 ' + d.tools.length + ' 个工具');
   });
 }
 function ntMcpSave() {
   var d = ntMcpReadForm();
   if (!d.name || !d.url) { setToast('名称和地址要填'); return; }
   var h = ntMcpHeader(d);
-  var scope = d.scope === 'cur' ? (ntCfg().charId || 'all') : 'all';
-  var rec = { name: d.name, url: d.url, kind: d.kind, token: d.token, hdr: h.hdr, val: h.val, enabled: d.enabled !== false, scope: scope, transport: d.transport || 'http', keywords: d.keywords || '', tools: d.tools || [] };
+  var rec = { name: d.name, url: d.url, kind: d.kind, token: d.token, hdr: h.hdr, val: h.val,
+    enabled: d.enabled !== false, scope: d.scope || 'all', transport: d.transport || 'http',
+    keywords: d.keywords || '', tools: d.tools || [] };
   if (ntMcpEdit >= 0) ntMcp[ntMcpEdit] = rec; else ntMcp.push(rec);
   ntMcpStore().then(function () {
     setToast('已保存');
-    ntMcpDraft = null; ntMcpEdit = -1; ntMcpFillForm({}); ntMcpRenderDraft(); ntMcpRenderList();
+    ntMcpDraft = null; ntMcpEdit = -1;
+    ntMcpFillForm({});
+    ntMcpRenderDraft(); ntMcpRenderList();
   });
 }
 function ntMcpEditAt(i) {
   var sv = ntMcp[i]; if (!sv) return;
   ntMcpEdit = i;
-  ntMcpDraft = { name: sv.name, url: sv.url, kind: sv.kind || 'bearer', token: sv.token || '', transport: sv.transport || 'http', keywords: sv.keywords || '', scope: (sv.scope && sv.scope !== 'all') ? 'cur' : 'all', enabled: sv.enabled !== false, tools: (sv.tools || []).slice() };
-  ntMcpFillForm(ntMcpDraft); ntMcpRenderDraft();
+  ntMcpDraft = { name: sv.name, url: sv.url, kind: sv.kind || 'bearer', token: sv.token || '',
+    transport: sv.transport || 'http', keywords: sv.keywords || '', scope: sv.scope || 'all',
+    enabled: sv.enabled !== false, tools: (sv.tools || []).slice() };
+  ntMcpFillForm(ntMcpDraft);
+  ntMcpRenderDraft();
 }
 function ntMcpNew() {
   ntMcpEdit = -1;
-  ntMcpDraft = { name: '', url: '', kind: 'bearer', token: '', scope: 'all', enabled: true, tools: [] };
-  ntMcpFillForm(ntMcpDraft); ntMcpRenderDraft();
+  ntMcpDraft = { name: '', url: '', kind: 'bearer', token: '', transport: 'http', keywords: '', scope: 'all', enabled: true, tools: [] };
+  ntMcpFillForm(ntMcpDraft);
+  ntMcpRenderDraft();
 }
 function ntMcpDel(i) {
   ntMcp.splice(i, 1);
   ntMcpStore().then(function () { ntMcpRenderList(); setToast('已删除'); });
 }
-function ntMcpToggleTool(sw) {
-  var i = parseInt(sw.getAttribute('data-mt'), 10);
+function ntMcpToggleTool(el) {
+  var i = parseInt(el.getAttribute('data-mt'), 10);
   if (!ntMcpDraft || !ntMcpDraft.tools[i]) return;
   ntMcpDraft.tools[i].enabled = !ntMcpDraft.tools[i].enabled;
   ntMcpRenderDraft();
@@ -39194,22 +39237,22 @@ function ntMcpAct(act, b) {
   else if (act === 'mcpdel') ntMcpDel(parseInt(b.getAttribute('data-i'), 10));
 }
 function renderMcp() {
+  mcInstallCss();
   var html =
-    '<div class="nt-h" style="margin-top:4px">已添加的服务</div><div class="nt-card2" id="mcpState"><div id="ntMcpList"></div>' +
-      ntRow('新建服务', '', '<span class="nt-act" data-nt="mcpnew">新建</span>') +
-    '</div>' +
-    '<div class="nt-h">编辑</div><div class="nt-card2" style="padding:6px 0">' +
-      '<div class="nt-pad">' +
-        '<input class="set-inp" id="ntMcpName" placeholder="名称，比如「文档查询」" style="margin:4px 0">' +
-        '<input class="set-inp" id="ntMcpUrl" placeholder="地址（https://…）" style="margin:4px 0">' +
-        '<select class="nt-sel" id="ntMcpKind" style="margin:4px 0;width:100%"><option value="bearer">凭据：Bearer Token</option><option value="apikey">凭据：API Key（x-api-key）</option></select>' +
-        '<select class="nt-sel" id="ntMcpTrans" style="margin:4px 0;width:100%"><option value="http">传输类型：Streamable HTTP（推荐）</option><option value="sse">传输类型：SSE（旧版）</option></select>' +
-        '<input class="set-inp" id="ntMcpKw" placeholder="触发词：说出它就开始用（逗号分隔，留空=服务名）" style="margin:4px 0">' +
-        '<input class="set-inp" id="ntMcpToken" placeholder="凭据（没有就留空）" style="margin:4px 0">' +
-        '<select class="nt-sel" id="ntMcpScope" style="margin:4px 0;width:100%"><option value="all">使用范围：所有 char</option><option value="cur">使用范围：只给悬浮球里的 char</option></select>' +
-        '<div class="nt-btns" style="margin-top:8px"><button class="set-btn ghost" data-nt="mcptest">测试连接</button><button class="set-btn" data-nt="mcpsave">保存</button></div>' +
-      '</div><div id="ntMcpDraft"></div></div>' +
-    '<div style="height:24px"></div>';
+    '<div id="mcpState" style="display:none"></div>' +
+    '<div class="mc-h" style="margin-top:6px">已添加</div><div id="ntMcpList"></div>' +
+    '<div class="mc-row" style="margin:4px 0 0"><span class="mc-btn fill" data-nt="mcpnew">新建服务</span></div>' +
+    '<div class="mc-h">编辑</div><div class="mc-card">' +
+      '<input class="mc-in" id="ntMcpName" placeholder="名称">' +
+      '<input class="mc-in" id="ntMcpUrl" placeholder="地址 https://…">' +
+      '<select class="mc-sel" id="ntMcpTrans"><option value="http">传输：Streamable HTTP（推荐）</option><option value="sse">传输：SSE（旧版）</option></select>' +
+      '<select class="mc-sel" id="ntMcpKind"><option value="bearer">凭据：Bearer Token</option><option value="apikey">凭据：API Key（x-api-key）</option></select>' +
+      '<input class="mc-in" id="ntMcpToken" placeholder="凭据（没有就留空）">' +
+      '<input class="mc-in" id="ntMcpKw" placeholder="触发词，逗号分隔（留空=名称）">' +
+      '<select class="mc-sel" id="ntMcpScope">' + ntMcpScopeOpts() + '</select>' +
+      '<div class="mc-row" style="margin-top:8px"><span class="mc-btn" data-nt="mcptest">测试连接</span><span class="mc-btn fill" data-nt="mcpsave">保存</span></div>' +
+      '<div id="ntMcpDraft"></div>' +
+    '</div><div style="height:28px"></div>';
   goSub('外部工具 MCP', html, function () { ntBind(); ntMcpLoad(ntMcpRenderList); ntMcpRenderDraft(); });
 }
 
