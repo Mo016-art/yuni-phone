@@ -338,7 +338,7 @@ public class MainActivity extends Activity {
                 .putInt("pro_min", Math.max(5, a.optInt("minutes", 60)))
                 .putInt("pro_qs", a.optInt("qs", 23))
                 .putInt("pro_qe", a.optInt("qe", 8))
-                .putBoolean("pro_screen", a.optBoolean("screenOnly", true)).apply();
+                .putBoolean("pro_screen", a.optBoolean("screenOnly", false)).apply();
             if (s != null) s.scheduleProactive();
             return "{\"live\":" + (s != null) + "}";
         }
@@ -517,7 +517,7 @@ public class MainActivity extends Activity {
         if ("mcpTest".equals(mm)) {
             JSONObject out = new JSONObject();
             try {
-                JSONObject r = McpClient.listTools(a.optString("url"), a.optString("hdr"), a.optString("val"));
+                JSONObject r = McpClient.listTools(a.optString("url"), a.optString("hdr"), a.optString("val"), a.optString("transport", "http"));
                 out.put("ok", true);
                 out.put("tools", r.optJSONArray("tools"));
             } catch (Exception e) {

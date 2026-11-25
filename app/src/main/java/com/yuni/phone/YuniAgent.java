@@ -33,6 +33,7 @@ public class YuniAgent {
     volatile String lastAskId = "";
     volatile String lastMcpResult = "";
     volatile boolean curExplicit = false;
+    volatile boolean mcpHit = false;
     volatile String curUserText = "";
     String banRaw = "";
     ArrayList<Object[]> banCache = new ArrayList<Object[]>();
@@ -407,7 +408,9 @@ public class YuniAgent {
         final boolean auto = text.matches("(?s).*(你自己刷|你来刷|你自己玩|你来玩).*");
         if (auto) max = 60;
         final boolean explicitReq = text.matches("(?s).*(帮我|替我|你来|帮忙|你去|让你|给我|你自己|你来刷|你来玩).*");
-        curExplicit = explicitReq;
+        curExplicit = explicitReq || text.matches("(?s).*(玩|陪我|一起|开局|来一局|开始|帮我|你来|查|点|订|买).*");
+        mcpHit = mcpMentioned(text);
+        if (mcpHit) curExplicit = true;
         final boolean taskLike = auto || explicitReq;
         // 纯提问（问能不能看到、是不是、为什么）：这一轮只回答，不动手
         if (!auto && !explicitReq) act = false;
@@ -830,12 +833,51 @@ public class YuniAgent {
                 JSONObject t = ts.optJSONObject(k);
                 if (t == null || !t.optBoolean("enabled", false)) continue;
                 sb.append("- ").append(s.optString("name")).append(" / ").append(t.optString("name"))
-                    .append("：").append(clip(t.optString("description"), 60)).append("\n");
+                    .append("：").append(clip(t.optString("description"), 100)).append(paramsOf(t)).append("\n");
                 n++;
             }
         }
+        String head = mcpHit ? "对方刚提到了这个服务，就是让你直接开始玩/用它：别再问规则、别确认，先按工具说明调用开局或帮助工具，然后自己接着玩下去。\n" : "";
         if (n == 0) return "";
-        return "【可用外部工具】只有对方明确让你用（比如「帮我点外卖」「你来查一下」）才调用，否则不要用。调用时单独一行输出：@@ACTION {\"a\":\"mcp\",\"server\":\"服务名\",\"tool\":\"工具名\",\"args\":{参数}}\n" + sb.toString();
+        return head + "【可用外部工具】只有对方明确让你用（比如「帮我点外卖」「你来查一下」）才调用，否则不要用。调用时单独一行输出：@@ACTION {\"a\":\"mcp\",\"server\":\"服务名\",\"tool\":\"工具名\",\"args\":{参数}}\n" + sb.toString();
+    }
+
+    // 对方直接说出服务名（或你设的触发词），就是让他开始用它
+    boolean mcpMentioned(String text) {
+        JSONArray a = mcpAll();
+        String cid = sp.getString("char_id", "");
+        for (int i = 0; i < a.length(); i++) {
+            JSONObject s = a.optJSONObject(i);
+            if (s == null || !s.optBoolean("enabled", true)) continue;
+            String sc = s.optString("scope", "all");
+            if (!(sc.equals("all") || sc.equals(cid))) continue;
+            java.util.ArrayList<String> kws = new java.util.ArrayList<String>();
+            kws.add(s.optString("name"));
+            for (String k : s.optString("keywords", "").split("[,，、\\s]+")) {
+                if (k.trim().length() > 0) kws.add(k.trim());
+            }
+            for (String k : kws) {
+                if (k.length() >= 2 && text.contains(k)) return true;
+            }
+        }
+        return false;
+    }
+
+    static String paramsOf(JSONObject t) {
+        JSONObject sc = t.optJSONObject("inputSchema");
+        if (sc == null) return "";
+        JSONObject pr = sc.optJSONObject("properties");
+        if (pr == null) return "";
+        JSONArray req = sc.optJSONArray("required");
+        StringBuilder sb = new StringBuilder("  参数：");
+        java.util.Iterator<String> it = pr.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            sb.append(k);
+            if (req != null && req.toString().contains("\"" + k + "\"")) sb.append("(必填)");
+            sb.append(' ');
+        }
+        return sb.toString();
     }
 
     String[] runMcp(JSONObject o) {
@@ -858,7 +900,7 @@ public class YuniAgent {
         }
         try {
             JSONObject args = o.optJSONObject("args");
-            String out = McpClient.callTool(s.optString("url"), s.optString("hdr", ""), s.optString("val", ""),
+            String out = McpClient.callTool(s.optString("url"), s.optString("hdr", ""), s.optString("val", ""), s.optString("transport", "http"),
                 tl, args == null ? new JSONObject() : args);
             lastMcpResult = clip(out, 1200);
             return new String[]{"调用工具 " + sv + "/" + tl, "ok"};
