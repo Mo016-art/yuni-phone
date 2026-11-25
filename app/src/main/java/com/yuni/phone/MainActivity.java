@@ -515,7 +515,15 @@ public class MainActivity extends Activity {
             return "true";
         }
         if ("mcpTools".equals(mm)) {
-            // 给主聊天用：OpenAI 兼容的 tools 定义，只含该 char 能用、已开启的工具
+            sp().edit().putString("diag_start", String.valueOf(System.currentTimeMillis())).apply();
+            try {
+                return mcpToolsJson(a);
+            } catch (Exception ex) {
+                sp().edit().putString("diag_err", "mcpTools: " + String.valueOf(ex) + " @" + System.currentTimeMillis()).apply();
+                return JSONObject.quote("ERR:" + ex);
+            }
+        }
+        if ("mcpTools_unused".equals(mm)) {
             String cid = a.optString("charId", sp().getString("char_id", ""));
             JSONArray out = new JSONArray();
             JSONArray arr = new JSONArray(sp().getString("mcp_servers", "[]"));
@@ -543,7 +551,8 @@ public class MainActivity extends Activity {
             return out.toString();
         }
         if ("mcpDiag".equals(mm)) {
-            return "{\"tools\":" + sp().getString("diag_tools", "null") + ",\"call\":" + sp().getString("diag_call", "null") + "}";
+            return "{\"tools\":" + sp().getString("diag_tools", "null") + ",\"call\":" + sp().getString("diag_call", "null")
+                + ",\"start\":" + JSONObject.quote(sp().getString("diag_start", "")) + ",\"err\":" + JSONObject.quote(sp().getString("diag_err", "")) + "}";
         }
         if ("mcpCallFull".equals(mm)) {
             String full = a.optString("name");
@@ -589,6 +598,34 @@ public class MainActivity extends Activity {
             return out.toString();
         }
         return "null";
+    }
+
+    String mcpToolsJson(JSONObject a) throws Exception {
+        String cid = a.optString("charId", sp().getString("char_id", ""));
+        JSONArray out = new JSONArray();
+        JSONArray arr = new JSONArray(sp().getString("mcp_servers", "[]"));
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject s = arr.optJSONObject(i);
+            if (s == null || !s.optBoolean("enabled", true)) continue;
+            String sc = s.optString("scope", "all");
+            if (!(sc.equals("all") || sc.equals(cid))) continue;
+            JSONArray ts = s.optJSONArray("tools");
+            if (ts == null) continue;
+            for (int k = 0; k < ts.length(); k++) {
+                JSONObject t = ts.optJSONObject(k);
+                if (t == null || !t.optBoolean("enabled", false)) continue;
+                JSONObject params = t.optJSONObject("inputSchema");
+                if (params == null) params = new JSONObject().put("type", "object").put("properties", new JSONObject());
+                JSONObject fn = new JSONObject()
+                    .put("name", McpNames.full(s.optString("name"), t.optString("name")))
+                    .put("description", McpNames.clip(t.optString("description"), 300))
+                    .put("parameters", params);
+                out.put(new JSONObject().put("type", "function").put("function", fn));
+            }
+        }
+        sp().edit().putString("diag_tools", new JSONObject().put("t", System.currentTimeMillis())
+            .put("n", out.length()).put("cid", cid).toString()).apply();
+        return out.toString();
     }
 
     boolean hasUsage() {
