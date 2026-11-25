@@ -39267,7 +39267,9 @@ function ntMcpDiag() {
     var lgTxt = lg.slice(-6).reverse().map(function (x) {
       return new Date(x.t).toLocaleTimeString() + ' · ' + (x.hit ? '命中' : '未命中') + ' · char「' + (x.name || '无') + '」' + (x.tools !== undefined ? ' · 工具 ' + x.tools : '') + ' · ' + (x.url || '');
     }).join('<br>') || '还没有拦截到任何聊天请求';
-    e2.innerHTML = '<div><b>最近一次带工具给模型：</b>' + esc2(tl) + '</div><div style="margin-top:6px"><b>最近一次工具调用：</b>' + esc2(cl) + '</div>' +
+    var nat = '<div style="margin-top:8px"><b>原生最近一次进入工具列表：</b>' + (d.start ? new Date(Number(d.start)).toLocaleTimeString() : '从未进入') + '</div>' +
+      '<div><b>原生最近错误：</b>' + esc2(d.err || '无') + '</div>';
+    e2.innerHTML = '<div><b>最近一次带工具给模型：</b>' + esc2(tl) + '</div><div style="margin-top:6px"><b>最近一次工具调用：</b>' + esc2(cl) + '</div>' + nat +
       '<div style="margin-top:8px"><b>最近的聊天请求（最多 6 条）：</b><br>' + lgTxt + '</div>';
   });
 }
@@ -50624,7 +50626,7 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
     try { req = JSON.parse(body); } catch (e) { return realFetch.apply(this, arguments); }
     var cid = (typeof cid0 === 'function') ? (cid0() || '') : '';
     var oaTools = await bridge('mcpTools', { charId: cid });
-    logIt({ url: url.slice(-40), hit: true, name: nm, cid: cid, tools: Array.isArray(oaTools) ? oaTools.length : ('非数组:' + typeof oaTools) });
+    logIt({ url: url.slice(-40), hit: true, name: nm, cid: cid, tools: Array.isArray(oaTools) ? oaTools.length : ('非数组:' + (oaTools === null ? 'null（桥接没回应）' : typeof oaTools)) });
     if (!Array.isArray(oaTools) || !oaTools.length) return realFetch.apply(this, arguments);
     var tools = isCl
       ? oaTools.map(function (t) { return { name: t.function.name, description: t.function.description || '', input_schema: t.function.parameters || { type: 'object', properties: {} } }; })
