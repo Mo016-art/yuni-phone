@@ -39265,7 +39265,7 @@ function ntMcpDiag() {
     var cl = d.call ? new Date(d.call.t).toLocaleTimeString() + ' · ' + d.call.name + ' · ' + (d.call.ok ? '成功' : '失败：' + d.call.err) : '还没有调用过工具';
     var lg = []; try { lg = JSON.parse(localStorage.getItem('ypMcpLog') || '[]'); } catch (e3) {}
     var lgTxt = lg.slice(-6).reverse().map(function (x) {
-      return new Date(x.t).toLocaleTimeString() + ' · ' + (x.hit ? '命中' : '未命中') + ' · char「' + (x.name || '无') + '」' + (x.tools !== undefined ? ' · 工具 ' + x.tools : '') + ' · ' + (x.url || '');
+      return new Date(x.t).toLocaleTimeString() + ' · ' + (x.hit ? '命中' : '未命中') + ' · char「' + (x.name || '无') + '」' + (x.tools !== undefined ? ' · 工具 ' + x.tools : '') + (x.detail ? '<br>　服务：' + x.detail : '');
     }).join('<br>') || '还没有拦截到任何聊天请求';
     var nat = '<div style="margin-top:8px"><b>原生最近一次进入工具列表：</b>' + (d.start ? new Date(Number(d.start)).toLocaleTimeString() : '从未进入') + '</div>' +
       '<div><b>原生最近错误：</b>' + esc2(d.err || '无') + '</div><div><b>原生版本：</b>' + esc2(d.ver || '旧版（没有版本号，说明装的还是旧 apk）') + '</div>';
@@ -50654,11 +50654,14 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
     var req;
     try { req = JSON.parse(body); } catch (e) { return realFetch.apply(this, arguments); }
     var cid = (typeof cid0 === 'function') ? (cid0() || '') : '';
-    if (!window.ntMcp || !window.ntMcp.length) {
-      try { var lst = await bridge('mcpList', {}); if (Array.isArray(lst)) window.ntMcp = lst; } catch (eL) {}
-    }
+    /* 每次直接从原生的服务列表取（和设置页存的是同一份），并记下每个服务的状态 */
+    var mlist = await bridge('mcpList', {});
+    if (Array.isArray(mlist)) window.ntMcp = mlist;
     var oaTools = toolsFromPage(cid);
-    logIt({ url: url.slice(-40), hit: true, name: nm, cid: cid, tools: oaTools.length });
+    var detail = Array.isArray(mlist) ? mlist.map(function (s) {
+      return (s.name || '?') + ':' + (s.enabled !== false ? '启用' : '停用') + ':' + (s.scope || 'all') + ':' + ((s.tools || []).filter(function (x) { return x.enabled; }).length) + '个开';
+    }).join(' | ') : ('列表非数组:' + typeof mlist);
+    logIt({ url: url.slice(-40), hit: true, name: nm, cid: cid, tools: oaTools.length, detail: detail });
     if (!Array.isArray(oaTools) || !oaTools.length) return realFetch.apply(this, arguments);
     var tools = isCl
       ? oaTools.map(function (t) { return { name: t.function.name, description: t.function.description || '', input_schema: t.function.parameters || { type: 'object', properties: {} } }; })
