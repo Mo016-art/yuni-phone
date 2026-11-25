@@ -39277,7 +39277,9 @@ function ntMcpDiag() {
   NT.call('mcpDiag').then(function (d) {
     var e2 = $('#mcpDiag'); if (!e2) return;
     d = d || {};
-    var tl = d.tools ? new Date(d.tools.t).toLocaleTimeString() + ' · 带了 ' + d.tools.n + ' 个工具' : '还没有带过工具（主聊天请求里没出现过）';
+    var tlog = []; try { tlog = JSON.parse(localStorage.getItem('ypMcpLog') || '[]'); } catch (e0) {}
+    var lastTools = tlog.filter(function (x) { return x.hit && typeof x.tools === 'number' && x.tools > 0; }).pop();
+    var tl = lastTools ? new Date(lastTools.t).toLocaleTimeString() + ' · 带了 ' + lastTools.tools + ' 个工具' : '还没有带过工具（主聊天请求里没出现过）';
     var cl = d.call ? new Date(d.call.t).toLocaleTimeString() + ' · ' + d.call.name + ' · ' + (d.call.ok ? '成功' : '失败：' + d.call.err) : '还没有调用过工具';
     var lg = []; try { lg = JSON.parse(localStorage.getItem('ypMcpLog') || '[]'); } catch (e3) {}
     var lgTxt = lg.slice(-6).reverse().map(function (x) {
