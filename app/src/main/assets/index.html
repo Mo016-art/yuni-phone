@@ -39242,6 +39242,7 @@ function renderMcp() {
     '<div id="mcpState" style="display:none"></div>' +
     '<div class="mc-h" style="margin-top:6px">已添加</div><div id="ntMcpList"></div>' +
     '<div class="mc-row" style="margin:4px 0 0"><span class="mc-btn fill" data-nt="mcpnew">新建服务</span></div>' +
+    '<div class="mc-h">诊断</div><div class="mc-card" id="mcpDiag" style="font-size:12.5px;line-height:1.6;color:#111">读取中…</div>' +
     '<div class="mc-h">编辑</div><div class="mc-card">' +
       '<input class="mc-in" id="ntMcpName" placeholder="名称">' +
       '<input class="mc-in" id="ntMcpUrl" placeholder="地址 https://…">' +
@@ -39253,7 +39254,17 @@ function renderMcp() {
       '<div class="mc-row" style="margin-top:8px"><span class="mc-btn" data-nt="mcptest">测试连接</span><span class="mc-btn fill" data-nt="mcpsave">保存</span></div>' +
       '<div id="ntMcpDraft"></div>' +
     '</div><div style="height:28px"></div>';
-  goSub('外部工具 MCP', html, function () { ntBind(); ntMcpLoad(ntMcpRenderList); ntMcpRenderDraft(); });
+  goSub('外部工具 MCP', html, function () { ntBind(); ntMcpLoad(ntMcpRenderList); ntMcpRenderDraft(); ntMcpDiag(); });
+}
+function ntMcpDiag() {
+  var el = $('#mcpDiag'); if (!el) return;
+  NT.call('mcpDiag').then(function (d) {
+    var e2 = $('#mcpDiag'); if (!e2) return;
+    d = d || {};
+    var tl = d.tools ? new Date(d.tools.t).toLocaleTimeString() + ' · 带了 ' + d.tools.n + ' 个工具' : '还没有带过工具（主聊天请求里没出现过）';
+    var cl = d.call ? new Date(d.call.t).toLocaleTimeString() + ' · ' + d.call.name + ' · ' + (d.call.ok ? '成功' : '失败：' + d.call.err) : '还没有调用过工具';
+    e2.innerHTML = '<div><b>最近一次带工具给模型：</b>' + esc2(tl) + '</div><div style="margin-top:6px"><b>最近一次工具调用：</b>' + esc2(cl) + '</div>';
+  });
 }
 
 function renderNative() {
@@ -50556,9 +50567,9 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
 })();
 </script>
 <script>
-/* MCP 接入主聊天（OpenAI 兼容的原生函数调用）：
-   主聊天请求里带上该 char 已开启的工具 → 模型返回 tool_calls → 原生执行 → 结果回填 → 再请求，直到模型给出正文。
-   只对带「活人感」标记的主聊天请求生效；不支持工具的接口自动退回普通请求。回滚：window.YP_NO_MCP = true */
+/* MCP 接入主聊天：原生函数调用。
+   请求里带上该 char 已开启的工具 → 模型返回工具调用 → 原生执行 → 结果回填 → 再请求，直到模型给出正文。
+   同时支持 OpenAI 兼容（/chat/completions）和 Claude 原生（/messages）。回滚：window.YP_NO_MCP = true */
 (function () {
   if (window.__ypMcpFetch || !window.fetch) return;
   window.__ypMcpFetch = true;
@@ -50569,48 +50580,76 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
       NT.call(m, a).then(res);
     });
   }
-  function sseOf(text) {
+  function sseOpenAI(text) {
     return 'data: ' + JSON.stringify({ choices: [{ delta: { content: text } }] }) + '\n\ndata: [DONE]\n\n';
+  }
+  function sseClaude(text) {
+    return 'event: content_block_start\ndata: ' + JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) + '\n\n' +
+      'event: content_block_delta\ndata: ' + JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: text } }) + '\n\n' +
+      'event: content_block_stop\ndata: ' + JSON.stringify({ type: 'content_block_stop', index: 0 }) + '\n\n' +
+      'event: message_stop\ndata: ' + JSON.stringify({ type: 'message_stop' }) + '\n\n';
   }
   window.fetch = async function (input, init) {
     var url = typeof input === 'string' ? input : ((input && input.url) || '');
     var body = init && init.body;
-    if (window.YP_NO_MCP || !/\/chat\/completions/.test(url) || typeof body !== 'string' || body.indexOf('【活人感') < 0) {
+    var isOA = /\/chat\/completions/.test(url), isCl = /\/v1\/messages(\?|$)/.test(url) || /\/messages(\?|$)/.test(url);
+    if (window.YP_NO_MCP || !(isOA || isCl) || typeof body !== 'string' || body.indexOf('【活人感') < 0) {
       return realFetch.apply(this, arguments);
     }
-    var cid = (typeof cid0 === 'function') ? (cid0() || '') : '';
-    var tools = await bridge('mcpTools', { charId: cid });
-    if (!Array.isArray(tools) || !tools.length) return realFetch.apply(this, arguments);
     var req;
     try { req = JSON.parse(body); } catch (e) { return realFetch.apply(this, arguments); }
+    var cid = (typeof cid0 === 'function') ? (cid0() || '') : '';
+    var oaTools = await bridge('mcpTools', { charId: cid });
+    if (!Array.isArray(oaTools) || !oaTools.length) return realFetch.apply(this, arguments);
+    var tools = isCl
+      ? oaTools.map(function (t) { return { name: t.function.name, description: t.function.description || '', input_schema: t.function.parameters || { type: 'object', properties: {} } }; })
+      : oaTools;
     var wantStream = !!req.stream;
     var msgs = (req.messages || []).slice();
     var text = null;
     for (var step = 0; step < 4; step++) {
-      var r = await realFetch(url, {
-        method: 'POST',
-        headers: init.headers,
-        body: JSON.stringify({ model: req.model, messages: msgs, tools: tools,
-          temperature: req.temperature, max_tokens: req.max_tokens, stream: false })
-      });
+      var payload = Object.assign({}, req, { messages: msgs, stream: false });
+      if (isCl) payload.tools = tools; else payload.tools = tools;
+      var r = await realFetch(url, { method: 'POST', headers: init.headers, body: JSON.stringify(payload) });
       if (!r.ok) {
-        if (step === 0) return realFetch.apply(this, arguments);   /* 接口不认工具：退回普通请求 */
+        if (step === 0) return realFetch.apply(this, arguments);
         break;
       }
       var j = await r.json();
-      var m = j.choices && j.choices[0] && j.choices[0].message;
-      if (!m) break;
-      if (!m.tool_calls || !m.tool_calls.length) { text = m.content || ''; break; }
-      msgs.push({ role: 'assistant', content: m.content || '', tool_calls: m.tool_calls });
-      for (var i = 0; i < m.tool_calls.length; i++) {
-        var tc = m.tool_calls[i], args = {};
-        try { args = JSON.parse((tc.function && tc.function.arguments) || '{}'); } catch (e) {}
-        var out = await bridge('mcpCallFull', { name: tc.function.name, args: args, charId: cid });
-        msgs.push({ role: 'tool', tool_call_id: tc.id, content: String(out || '（工具没有返回内容）') });
+      if (isCl) {
+        var blocks = j.content || [];
+        var uses = blocks.filter(function (b) { return b.type === 'tool_use'; });
+        if (!uses.length) {
+          text = blocks.filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('');
+          break;
+        }
+        msgs.push({ role: 'assistant', content: blocks });
+        var results = [];
+        for (var u = 0; u < uses.length; u++) {
+          var outC = await bridge('mcpCallFull', { name: uses[u].name, args: uses[u].input || {}, charId: cid });
+          results.push({ type: 'tool_result', tool_use_id: uses[u].id, content: String(outC || '（工具没有返回内容）') });
+        }
+        msgs.push({ role: 'user', content: results });
+      } else {
+        var mm = j.choices && j.choices[0] && j.choices[0].message;
+        if (!mm) break;
+        if (!mm.tool_calls || !mm.tool_calls.length) { text = mm.content || ''; break; }
+        msgs.push({ role: 'assistant', content: mm.content || '', tool_calls: mm.tool_calls });
+        for (var i = 0; i < mm.tool_calls.length; i++) {
+          var tc = mm.tool_calls[i], args = {};
+          try { args = JSON.parse((tc.function && tc.function.arguments) || '{}'); } catch (e) {}
+          var out = await bridge('mcpCallFull', { name: tc.function.name, args: args, charId: cid });
+          msgs.push({ role: 'tool', tool_call_id: tc.id, content: String(out || '（工具没有返回内容）') });
+        }
       }
     }
     if (text === null) return realFetch.apply(this, arguments);
-    if (wantStream) return new Response(sseOf(text), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    if (isCl) {
+      if (wantStream) return new Response(sseClaude(text), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      return new Response(JSON.stringify({ type: 'message', role: 'assistant', content: [{ type: 'text', text: text }], stop_reason: 'end_turn' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (wantStream) return new Response(sseOpenAI(text), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
     return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: text }, finish_reason: 'stop' }] }),
       { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
