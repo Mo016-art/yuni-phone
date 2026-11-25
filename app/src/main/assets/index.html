@@ -39263,7 +39263,12 @@ function ntMcpDiag() {
     d = d || {};
     var tl = d.tools ? new Date(d.tools.t).toLocaleTimeString() + ' · 带了 ' + d.tools.n + ' 个工具' : '还没有带过工具（主聊天请求里没出现过）';
     var cl = d.call ? new Date(d.call.t).toLocaleTimeString() + ' · ' + d.call.name + ' · ' + (d.call.ok ? '成功' : '失败：' + d.call.err) : '还没有调用过工具';
-    e2.innerHTML = '<div><b>最近一次带工具给模型：</b>' + esc2(tl) + '</div><div style="margin-top:6px"><b>最近一次工具调用：</b>' + esc2(cl) + '</div>';
+    var lg = []; try { lg = JSON.parse(localStorage.getItem('ypMcpLog') || '[]'); } catch (e3) {}
+    var lgTxt = lg.slice(-6).reverse().map(function (x) {
+      return new Date(x.t).toLocaleTimeString() + ' · ' + (x.hit ? '命中' : '未命中') + ' · char「' + (x.name || '无') + '」' + (x.tools !== undefined ? ' · 工具 ' + x.tools : '') + ' · ' + (x.url || '');
+    }).join('<br>') || '还没有拦截到任何聊天请求';
+    e2.innerHTML = '<div><b>最近一次带工具给模型：</b>' + esc2(tl) + '</div><div style="margin-top:6px"><b>最近一次工具调用：</b>' + esc2(cl) + '</div>' +
+      '<div style="margin-top:8px"><b>最近的聊天请求（最多 6 条）：</b><br>' + lgTxt + '</div>';
   });
 }
 
@@ -50589,17 +50594,37 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
       'event: content_block_stop\ndata: ' + JSON.stringify({ type: 'content_block_stop', index: 0 }) + '\n\n' +
       'event: message_stop\ndata: ' + JSON.stringify({ type: 'message_stop' }) + '\n\n';
   }
+  function logIt(o) {
+    try {
+      var a = JSON.parse(localStorage.getItem('ypMcpLog') || '[]');
+      a.push(Object.assign({ t: Date.now() }, o));
+      if (a.length > 20) a.splice(0, a.length - 20);
+      localStorage.setItem('ypMcpLog', JSON.stringify(a));
+    } catch (e) {}
+  }
+  function curName() {
+    try {
+      var id = (typeof cid0 === 'function') ? cid0() : '';
+      var f = (typeof friends !== 'undefined' && friends) ? friends.find(function (x) { return x.id === id; }) : null;
+      return f ? String(f.name || '') : '';
+    } catch (e) { return ''; }
+  }
   window.fetch = async function (input, init) {
     var url = typeof input === 'string' ? input : ((input && input.url) || '');
     var body = init && init.body;
     var isOA = /\/chat\/completions/.test(url), isCl = /\/v1\/messages(\?|$)/.test(url) || /\/messages(\?|$)/.test(url);
-    if (window.YP_NO_MCP || !(isOA || isCl) || typeof body !== 'string' || body.indexOf('【活人感') < 0) {
+    if (!(isOA || isCl) || typeof body !== 'string') return realFetch.apply(this, arguments);
+    var nm = curName();
+    var hit = body.indexOf('【活人感') >= 0 || (nm.length >= 1 && body.indexOf(nm) >= 0);
+    if (window.YP_NO_MCP || !hit) {
+      logIt({ url: url.slice(-40), hit: false, name: nm, bodyLen: body.length });
       return realFetch.apply(this, arguments);
     }
     var req;
     try { req = JSON.parse(body); } catch (e) { return realFetch.apply(this, arguments); }
     var cid = (typeof cid0 === 'function') ? (cid0() || '') : '';
     var oaTools = await bridge('mcpTools', { charId: cid });
+    logIt({ url: url.slice(-40), hit: true, name: nm, cid: cid, tools: Array.isArray(oaTools) ? oaTools.length : ('非数组:' + typeof oaTools) });
     if (!Array.isArray(oaTools) || !oaTools.length) return realFetch.apply(this, arguments);
     var tools = isCl
       ? oaTools.map(function (t) { return { name: t.function.name, description: t.function.description || '', input_schema: t.function.parameters || { type: 'object', properties: {} } }; })
