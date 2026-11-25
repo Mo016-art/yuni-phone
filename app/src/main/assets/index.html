@@ -38668,6 +38668,7 @@ const NT = (function () {
     }
   };
 })();
+window.NT = NT;
 const NTK = 'yuni_native_cfg';
 let ntApps = [];
 function ntCfg() {
@@ -50583,8 +50584,9 @@ html body[data-yp-skin="pixel"] #chatPage .chat-capsule.yp-multiline{border-radi
   var realFetch = window.fetch.bind(window);
   function bridge(m, a) {
     return new Promise(function (res) {
-      if (typeof NT === 'undefined' || !NT || !NT.call) { res(null); return; }
-      NT.call(m, a).then(res);
+      var N = window.NT;
+      if (!N || !N.call) { res(null); return; }
+      N.call(m, a).then(res);
     });
   }
   function mcpSan(s) { return String(s || '').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40); }
