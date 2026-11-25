@@ -172,13 +172,42 @@ public class MainActivity extends Activity {
                                               boolean isMain, JavaScriptReplyProxy reply) {
                         if (!isMain || origin == null || !HOST.equals(origin.getHost())) return;
                         String idRaw = "0";
-                        String res = "null";
+                        String mm = "";
+                        JSONObject aa = new JSONObject();
                         try {
                             JSONObject o = new JSONObject(msg.getData());
                             idRaw = String.valueOf(o.opt("id"));
-                            JSONObject a = o.optJSONObject("a");
-                            if (a == null) a = new JSONObject();
-                            res = handle(o.optString("m"), a);
+                            mm = o.optString("m");
+                            JSONObject a0 = o.optJSONObject("a");
+                            if (a0 != null) aa = a0;
+                        } catch (Exception e) {
+                        }
+                        if (mm.startsWith("mcp")) {
+                            final String fid = idRaw;
+                            final String fm = mm;
+                            final JSONObject fa = aa;
+                            final JavaScriptReplyProxy fr = reply;
+                            new Thread(new Runnable() {
+                                public void run() {
+                                    String rr;
+                                    try {
+                                        rr = handleMcp(fm, fa);
+                                    } catch (Exception ex) {
+                                        rr = JSONObject.quote("ERR:" + ex.getMessage());
+                                    }
+                                    final String out = "{\"id\":" + fid + ",\"r\":" + rr + "}";
+                                    runOnUiThread(new Runnable() {
+                                        public void run() {
+                                            fr.postMessage(out);
+                                        }
+                                    });
+                                }
+                            }).start();
+                            return;
+                        }
+                        String res = "null";
+                        try {
+                            res = handle(mm, aa);
                         } catch (Exception e) {
                             res = "null";
                         }
@@ -271,6 +300,7 @@ public class MainActivity extends Activity {
                 .putString("char_persona", a.optString("persona"))
                 .putString("user_name", a.optString("userName"))
                 .putString("char_sysmain", a.optString("sysMain"))
+                .putString("char_id", a.optString("charId"))
                 .putString("char_ban", a.optString("ban", "[]"))
                 .putString("char_context", a.optString("context")).apply();
             if (s != null) s.refreshBall();
@@ -474,6 +504,27 @@ public class MainActivity extends Activity {
         }
         if ("getLastRead".equals(m)) {
             return JSONObject.quote(sp().getString("last_read", ""));
+        }
+        return "null";
+    }
+
+    String handleMcp(String mm, JSONObject a) throws Exception {
+        if ("mcpList".equals(mm)) return sp().getString("mcp_servers", "[]");
+        if ("mcpSave".equals(mm)) {
+            sp().edit().putString("mcp_servers", a.optString("json", "[]")).apply();
+            return "true";
+        }
+        if ("mcpTest".equals(mm)) {
+            JSONObject out = new JSONObject();
+            try {
+                JSONObject r = McpClient.listTools(a.optString("url"), a.optString("hdr"), a.optString("val"));
+                out.put("ok", true);
+                out.put("tools", r.optJSONArray("tools"));
+            } catch (Exception e) {
+                out.put("ok", false);
+                out.put("error", String.valueOf(e.getMessage()));
+            }
+            return out.toString();
         }
         return "null";
     }

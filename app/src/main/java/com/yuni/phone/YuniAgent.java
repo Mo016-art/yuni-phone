@@ -31,6 +31,8 @@ public class YuniAgent {
     volatile boolean muteSub = false;
     volatile boolean bg = false;
     volatile String lastAskId = "";
+    volatile String lastMcpResult = "";
+    volatile boolean curExplicit = false;
     volatile String curUserText = "";
     String banRaw = "";
     ArrayList<Object[]> banCache = new ArrayList<Object[]>();
@@ -405,6 +407,7 @@ public class YuniAgent {
         final boolean auto = text.matches("(?s).*(你自己刷|你来刷|你自己玩|你来玩).*");
         if (auto) max = 60;
         final boolean explicitReq = text.matches("(?s).*(帮我|替我|你来|帮忙|你去|让你|给我|你自己|你来刷|你来玩).*");
+        curExplicit = explicitReq;
         final boolean taskLike = auto || explicitReq;
         // 纯提问（问能不能看到、是不是、为什么）：这一轮只回答，不动手
         if (!auto && !explicitReq) act = false;
@@ -490,11 +493,14 @@ public class YuniAgent {
                 ended = true;
                 break;
             }
-            if (!act) {
+            boolean hasMcp = false;
+            for (JSONObject hx : acts) if ("mcp".equals(hx.optString("a"))) hasMcp = true;
+            if (!act && !hasMcp) {
                 svc.subtitle(shown + "\n（还没开启「允许操作」，我只能说说）");
                 ended = true;
                 break;
             }
+            if (!act) { ArrayList<JSONObject> keepM = new ArrayList<JSONObject>(); for (JSONObject kx : acts) if ("mcp".equals(kx.optString("a"))) keepM.add(kx); acts = keepM; }
             StringBuilder res = new StringBuilder();
             StringBuilder desc = new StringBuilder();
             int n = 0;
@@ -508,6 +514,7 @@ public class YuniAgent {
                 desc.append(r[0]);
                 if (res.length() > 0) res.append("；");
                 res.append(r[0]).append(":").append(r[1]);
+                if (lastMcpResult.length() > 0) { res.append("\n工具返回：").append(lastMcpResult); lastMcpResult = ""; }
                 svc.subtitle(shown + "\n▶ " + desc + (r[1].equals("ok") ? "" : "（" + r[1] + "）"));
                 if (!r[1].equals("ok")) break;
                 if (n < acts.size()) Thread.sleep(420);
@@ -679,6 +686,8 @@ public class YuniAgent {
         } else if (see) {
             s.append("你现在只能看屏幕，不能操作手机。\n");
         }
+        String mcpP = curExplicit ? mcpToolsPrompt() : "";
+        if (mcpP.length() > 0) s.append(mcpP).append("\n");
         String rsum = YuniRules.summary(svc);
         if (rsum.length() > 0) s.append(rsum).append("\n");
         String us = svc.usageSummary();
@@ -783,9 +792,85 @@ public class YuniAgent {
         return out;
     }
 
+    // ---------- 外部工具（MCP） ----------
+    JSONArray mcpAll() {
+        try {
+            return new JSONArray(sp.getString("mcp_servers", "[]"));
+        } catch (Exception e) {
+            return new JSONArray();
+        }
+    }
+
+    JSONObject mcpFind(String name) {
+        String cid = sp.getString("char_id", "");
+        JSONArray a = mcpAll();
+        for (int i = 0; i < a.length(); i++) {
+            JSONObject s = a.optJSONObject(i);
+            if (s == null || !s.optBoolean("enabled", true)) continue;
+            if (!name.equals(s.optString("name"))) continue;
+            String sc = s.optString("scope", "all");
+            if (sc.equals("all") || sc.equals(cid)) return s;
+        }
+        return null;
+    }
+
+    String mcpToolsPrompt() {
+        JSONArray a = mcpAll();
+        String cid = sp.getString("char_id", "");
+        StringBuilder sb = new StringBuilder();
+        int n = 0;
+        for (int i = 0; i < a.length() && n < 20; i++) {
+            JSONObject s = a.optJSONObject(i);
+            if (s == null || !s.optBoolean("enabled", true)) continue;
+            String sc = s.optString("scope", "all");
+            if (!(sc.equals("all") || sc.equals(cid))) continue;
+            JSONArray ts = s.optJSONArray("tools");
+            if (ts == null) continue;
+            for (int k = 0; k < ts.length() && n < 20; k++) {
+                JSONObject t = ts.optJSONObject(k);
+                if (t == null || !t.optBoolean("enabled", false)) continue;
+                sb.append("- ").append(s.optString("name")).append(" / ").append(t.optString("name"))
+                    .append("：").append(clip(t.optString("description"), 60)).append("\n");
+                n++;
+            }
+        }
+        if (n == 0) return "";
+        return "【可用外部工具】只有对方明确让你用（比如「帮我点外卖」「你来查一下」）才调用，否则不要用。调用时单独一行输出：@@ACTION {\"a\":\"mcp\",\"server\":\"服务名\",\"tool\":\"工具名\",\"args\":{参数}}\n" + sb.toString();
+    }
+
+    String[] runMcp(JSONObject o) {
+        String sv = o.optString("server"), tl = o.optString("tool");
+        if (!curExplicit) return new String[]{"调用工具 " + tl, "失败：对方还没明确让你用工具"};
+        JSONObject s = mcpFind(sv);
+        if (s == null) return new String[]{"调用工具 " + sv, "失败：这个服务没启用或不适用于当前 char"};
+        JSONArray ts = s.optJSONArray("tools");
+        boolean on = false;
+        if (ts != null) {
+            for (int k = 0; k < ts.length(); k++) {
+                JSONObject t = ts.optJSONObject(k);
+                if (t != null && tl.equals(t.optString("name")) && t.optBoolean("enabled", false)) on = true;
+            }
+        }
+        if (!on) return new String[]{"调用工具 " + tl, "失败：这个工具没开启"};
+        if (tl.matches("(?i).*(order|buy|pay|send|delete|purchase|submit|remove).*")
+            && !curUserText.matches("(?s).*(下单|买|付|支付|发送|删除|提交|确认).*")) {
+            return new String[]{"调用工具 " + tl, "失败：这个操作可能花钱或改东西，要对方明确同意"};
+        }
+        try {
+            JSONObject args = o.optJSONObject("args");
+            String out = McpClient.callTool(s.optString("url"), s.optString("hdr", ""), s.optString("val", ""),
+                tl, args == null ? new JSONObject() : args);
+            lastMcpResult = clip(out, 1200);
+            return new String[]{"调用工具 " + sv + "/" + tl, "ok"};
+        } catch (Exception e) {
+            return new String[]{"调用工具 " + tl, "失败：" + clip(String.valueOf(e.getMessage()), 80)};
+        }
+    }
+
     // ---------- 执行动作 ----------
     String[] exec(final JSONObject o) {
         String a = o.optString("a");
+        if ("mcp".equals(a)) return runMcp(o);
         try {
             if ("tap".equals(a)) {
                 int[] dz = svc.screenSize();
