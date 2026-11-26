@@ -8895,6 +8895,7 @@ function renderChat(cid) {
           if ((m.kind || m.k) === 'think' && !_hasThemBody47) return '';
         }
       } catch (eQ47r) {}
+      if (m.mcpHtml) return ypMcpUiRow(m);
       if (m.f === 'sys') return sysRow(m);
       if ((m.kind || m.k) === 'think') return (window.YP_NO_THINK && !m.native) ? '' : thinkRow(m, cid);   /* v143：不显示，数据保留可回滚；v1816 传 cid 读展开态 */
       if (m.revoked) return revokedRow(m, cid);
@@ -52974,6 +52975,28 @@ function ypPeopleBlock(f, existing) {
     });
     return out.slice(0, 40);
   }
+  /* 第四步：界面网页渲染成聊天里的一张卡片（沙盒 iframe，不能访问小手机本身） */
+  window.ypMcpUiRow = function (m) {
+    var esc2x = function (s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    return '<div class="bub-row sys" style="width:100%"><div style="width:100%;max-width:340px;margin:0 auto">' +
+      '<div style="font-size:12px;color:#8A7A8D;text-align:center;margin:4px 0 6px">' + esc2x(m.t) + '</div>' +
+      '<iframe sandbox="allow-scripts" srcdoc="' + esc2x(m.mcpHtml) + '" style="width:100%;height:380px;border:0;border-radius:14px;background:#fff"></iframe>' +
+      '</div></div>';
+  };
+  /* 第二步：工具调用后，在聊天里插一条居中的小字卡片（和其它系统提示同一种样式） */
+  function ypToolCard(cid, server, tool, result, html) {
+    try {
+      if (!cid || typeof msgs === 'undefined') return;
+      if (!msgs[cid]) msgs[cid] = [];
+      var ok = result === '成功';
+      var txt = '调用工具 ' + server + ' / ' + tool + ' · ' + (ok ? '成功' : '失败：' + String(result).slice(0, 60));
+      var card = { f: 'sys', t: txt, time: '', ts: Date.now(), id: 'tool' + Date.now() + Math.floor(Math.random() * 999) };
+      if (html) card.mcpHtml = String(html).slice(0, 300000);
+      msgs[cid].push(card);
+      if (typeof LS_MSGS !== 'undefined') localStorage.setItem(LS_MSGS, JSON.stringify(msgs));
+      if (typeof curCid !== 'undefined' && curCid === cid && typeof renderChat === 'function') renderChat(cid);
+    } catch (e) {}
+  }
   async function callMcpTool(fullName, args, cid) {
     var found = null;
     (window.ntMcp || []).forEach(function (sv) {
@@ -52982,10 +53005,17 @@ function ypPeopleBlock(f, existing) {
         if (!found && t && t.enabled && mcpFullName(sv.name, t.name) === fullName) found = { sv: sv, t: t };
       });
     });
-    if (!found) return '这个工具没有开启或不适用于当前 char';
+    if (!found) {
+      ypToolCard(cid, '未知服务', fullName, '这个工具没有开启或不适用于当前 char');
+      return '这个工具没有开启或不适用于当前 char';
+    }
     var r = await bridge('mcpCallDirect', { url: found.sv.url, hdr: found.sv.hdr || '', val: found.sv.val || '',
       transport: found.sv.transport || 'http', tool: found.t.name, args: args || {} });
-    return (r === null || r === undefined) ? '工具没有返回（网络或原生错误）' : String(r);
+    var obj = (r && typeof r === 'object') ? r : null;
+    var txt = obj ? String(obj.text || '') : ((r === null || r === undefined) ? '工具没有返回（网络或原生错误）' : String(r));
+    var bad = /^(工具出错|这个工具没有开启|工具没有返回)/.test(txt);
+    ypToolCard(cid, found.sv.name, found.t.name, bad ? txt : '成功', obj && obj.html ? obj.html : '');
+    return txt;
   }
   function sseOpenAI(text) {
     return 'data: ' + JSON.stringify({ choices: [{ delta: { content: text } }] }) + '\n\ndata: [DONE]\n\n';
