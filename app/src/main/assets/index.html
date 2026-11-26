@@ -8895,6 +8895,7 @@ function renderChat(cid) {
           if ((m.kind || m.k) === 'think' && !_hasThemBody47) return '';
         }
       } catch (eQ47r) {}
+      if (m.toolCard) return window.ypToolCardRow(m);
       if (m.mcpHtml) return ypMcpUiRow(m);
       if (m.f === 'sys') return sysRow(m);
       if ((m.kind || m.k) === 'think') return (window.YP_NO_THINK && !m.native) ? '' : thinkRow(m, cid);   /* v143：不显示，数据保留可回滚；v1816 传 cid 读展开态 */
@@ -41577,7 +41578,8 @@ function ntMcpDiag() {
     }).join('<br>') || '还没有拦截到任何聊天请求';
     var nat = '<div style="margin-top:8px"><b>原生最近一次进入工具列表：</b>' + (d.start ? new Date(Number(d.start)).toLocaleTimeString() : '从未进入') + '</div>' +
       '<div><b>原生最近错误：</b>' + esc2(d.err || '无') + '</div><div><b>原生版本：</b>' + esc2(d.ver || '旧版（没有版本号，说明装的还是旧 apk）') + '</div>';
-    e2.innerHTML = '<div><b>最近一次带工具给模型：</b>' + esc2(tl) + '</div><div style="margin-top:6px"><b>最近一次工具调用：</b>' + esc2(cl) + '</div>' + nat +
+    var tlast = {}; try { tlast = JSON.parse(localStorage.getItem('ypToolLast') || '{}'); } catch (e9) {}
+    e2.innerHTML = '<div><b>最近一次工具返回：</b>' + esc2(tlast.t ? (tlast.name + ' · ' + (tlast.ok ? '成功' : '失败') + (tlast.html ? ' · 有界面' : '') + '<br>' + tlast.preview) : '还没有') + '</div><div style="margin-top:6px"><b>最近一次带工具给模型：</b>' + esc2(tl) + '</div><div style="margin-top:6px"><b>最近一次工具调用：</b>' + esc2(cl) + '</div>' + nat +
       '<div style="margin-top:8px"><b>最近的聊天请求（最多 6 条）：</b><br>' + lgTxt + '</div>';
   });
 }
@@ -52975,6 +52977,11 @@ function ypPeopleBlock(f, existing) {
     });
     return out.slice(0, 40);
   }
+  /* 工具卡片：一行窄小的标签，居中 */
+  window.ypToolCardRow = function (m) {
+    var esc3 = function (s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    return '<div class="bub-row sys" style="width:100%;text-align:center"><span style="display:inline-block;max-width:80%;font-size:11px;line-height:1.4;color:#8A7A8D;background:rgba(200,180,220,.14);border-radius:999px;padding:2px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle">' + esc3(m.t) + '</span></div>';
+  };
   /* 第四步：界面网页渲染成聊天里的一张卡片（沙盒 iframe，不能访问小手机本身） */
   window.ypMcpUiRow = function (m) {
     var esc2x = function (s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
@@ -52989,8 +52996,8 @@ function ypPeopleBlock(f, existing) {
       if (!cid || typeof msgs === 'undefined') return;
       if (!msgs[cid]) msgs[cid] = [];
       var ok = result === '成功';
-      var txt = '调用工具 ' + server + ' / ' + tool + ' · ' + (ok ? '成功' : '失败：' + String(result).slice(0, 60));
-      var card = { f: 'sys', t: txt, time: '', ts: Date.now(), id: 'tool' + Date.now() + Math.floor(Math.random() * 999) };
+      var txt = server + ' · ' + tool + (ok ? ' ✓' : ' ✗');
+      var card = { f: 'sys', t: txt, toolCard: true, time: '', ts: Date.now(), id: 'tool' + Date.now() + Math.floor(Math.random() * 999) };
       if (html) card.mcpHtml = String(html).slice(0, 300000);
       msgs[cid].push(card);
       if (typeof LS_MSGS !== 'undefined') localStorage.setItem(LS_MSGS, JSON.stringify(msgs));
@@ -53014,6 +53021,7 @@ function ypPeopleBlock(f, existing) {
     var obj = (r && typeof r === 'object') ? r : null;
     var txt = obj ? String(obj.text || '') : ((r === null || r === undefined) ? '工具没有返回（网络或原生错误）' : String(r));
     var bad = /^(工具出错|这个工具没有开启|工具没有返回)/.test(txt);
+    try { localStorage.setItem('ypToolLast', JSON.stringify({ t: Date.now(), name: fullName, ok: !bad, html: !!(obj && obj.html), preview: txt.slice(0, 200) })); } catch (eT) {}
     ypToolCard(cid, found.sv.name, found.t.name, bad ? txt : '成功', obj && obj.html ? obj.html : '');
     return txt;
   }
@@ -53127,5 +53135,6 @@ function ypPeopleBlock(f, existing) {
   };
 })();
 </script>
+<script>(function(){var s=document.createElement('style');s.textContent='.bub,.bub *,.bub-row .bub{-webkit-user-select:text!important;user-select:text!important;-webkit-touch-callout:default!important}';document.head.appendChild(s);})();</script>
 </body>
 </html>
