@@ -563,7 +563,7 @@ public class MainActivity extends Activity {
                 String res = rich.optString("text");
                 sp().edit().putString("diag_call", new JSONObject().put("t", System.currentTimeMillis())
                     .put("name", tl).put("ok", true).put("len", res.length()).toString()).apply();
-                rich.put("text", McpNames.clip(res, 4000));
+                rich.put("text", McpNames.clip(res, 20000));
                 return rich.toString();
             } catch (Exception ex) {
                 sp().edit().putString("diag_call", new JSONObject().put("t", System.currentTimeMillis())
@@ -592,7 +592,7 @@ public class MainActivity extends Activity {
                             s.optString("transport", "http"), t.optString("name"), args == null ? new JSONObject() : args);
                         sp().edit().putString("diag_call", new JSONObject().put("t", System.currentTimeMillis())
                             .put("name", full).put("ok", true).put("len", res.length()).toString()).apply();
-                        return JSONObject.quote(McpNames.clip(res, 4000));
+                        return JSONObject.quote(McpNames.clip(res, 20000));
                     } catch (Exception ex) {
                         sp().edit().putString("diag_call", new JSONObject().put("t", System.currentTimeMillis())
                             .put("name", full).put("ok", false).put("err", McpNames.clip(String.valueOf(ex.getMessage()), 120)).toString()).apply();
