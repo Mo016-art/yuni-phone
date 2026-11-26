@@ -8895,6 +8895,7 @@ function renderChat(cid) {
           if ((m.kind || m.k) === 'think' && !_hasThemBody47) return '';
         }
       } catch (eQ47r) {}
+      if (m.secret) return window.ypSecretRow(m);
       if (m.toolCard) return window.ypToolCardRow(m);
       if (m.mcpHtml) return ypMcpUiRow(m);
       if (m.f === 'sys') return sysRow(m);
@@ -52977,6 +52978,26 @@ function ypPeopleBlock(f, existing) {
     });
     return out.slice(0, 40);
   }
+  /* 完整内容卡片：直接显示工具返回的原文（不经过模型），带复制按钮 */
+  window.ypSecretRow = function (m) {
+    var esc4 = function (s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    return '<div class="bub-row sys" style="width:100%"><div style="width:100%;max-width:340px;margin:0 auto;background:#fff;border:1px solid #D9CCE3;border-radius:14px;padding:10px 12px">' +
+      '<div style="font-size:11px;color:#8A7A8D;margin-bottom:6px">' + esc4(m.t) + '</div>' +
+      '<div style="font-family:monospace;font-size:13px;color:#2A2230;word-break:break-all;-webkit-user-select:text;user-select:text;line-height:1.5">' + esc4(m.secret) + '</div>' +
+      '<div style="text-align:right;margin-top:8px"><span data-v="' + esc4(m.secret) + '" onclick="ypCopyText(this.getAttribute(\'data-v\'),this)" style="font-size:12px;color:#fff;background:#3A3A42;border-radius:999px;padding:4px 12px;cursor:pointer">复制</span></div>' +
+      '</div></div>';
+  };
+  window.ypCopyText = function (v, el) {
+    var done = function () { if (el) { el.textContent = '已复制'; setTimeout(function () { el.textContent = '复制'; }, 1200); } };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(v).then(done, function () { fallbackCopy(v); done(); }); return; }
+    } catch (e) {}
+    fallbackCopy(v); done();
+    function fallbackCopy(s) {
+      var ta = document.createElement('textarea'); ta.value = s; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch (e) {} document.body.removeChild(ta);
+    }
+  };
   /* 工具卡片：一行窄小的标签，居中 */
   window.ypToolCardRow = function (m) {
     var esc3 = function (s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
@@ -52991,7 +53012,7 @@ function ypPeopleBlock(f, existing) {
       '</div></div>';
   };
   /* 第二步：工具调用后，在聊天里插一条居中的小字卡片（和其它系统提示同一种样式） */
-  function ypToolCard(cid, server, tool, result, html) {
+  function ypToolCard(cid, server, tool, result, html, secret) {
     try {
       if (!cid || typeof msgs === 'undefined') return;
       if (!msgs[cid]) msgs[cid] = [];
@@ -52999,6 +53020,7 @@ function ypPeopleBlock(f, existing) {
       var txt = server + ' · ' + tool + (ok ? ' ✓' : ' ✗');
       var card = { f: 'sys', t: txt, toolCard: true, time: '', ts: Date.now(), id: 'tool' + Date.now() + Math.floor(Math.random() * 999) };
       if (html) card.mcpHtml = String(html).slice(0, 300000);
+      if (secret) card.secret = String(secret).slice(0, 2000);
       msgs[cid].push(card);
       if (typeof LS_MSGS !== 'undefined') localStorage.setItem(LS_MSGS, JSON.stringify(msgs));
       if (typeof curCid !== 'undefined' && curCid === cid && typeof renderChat === 'function') renderChat(cid);
@@ -53022,7 +53044,9 @@ function ypPeopleBlock(f, existing) {
     var txt = obj ? String(obj.text || '') : ((r === null || r === undefined) ? '工具没有返回（网络或原生错误）' : String(r));
     var bad = /^(工具出错|这个工具没有开启|工具没有返回)/.test(txt);
     try { localStorage.setItem('ypToolLast', JSON.stringify({ t: Date.now(), name: fullName, ok: !bad, html: !!(obj && obj.html), preview: txt.slice(0, 200) })); } catch (eT) {}
-    ypToolCard(cid, found.sv.name, found.t.name, bad ? txt : '成功', obj && obj.html ? obj.html : '');
+    var longTok = (!bad && txt.length >= 16) ? txt.trim() : '';
+    if (longTok.length > 2000) longTok = '';
+    ypToolCard(cid, found.sv.name, found.t.name, bad ? txt : '成功', obj && obj.html ? obj.html : '', longTok);
     return txt;
   }
   function sseOpenAI(text) {
