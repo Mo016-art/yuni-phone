@@ -8991,7 +8991,16 @@ function renderChat(cid) {
         chatBody.scrollTop = Math.max(0, chatBody.scrollTop + ((_r2.top - _br2.top) - _rpThinkAnchor.top));
       }
     }
-  } catch (eRP1) { chatBody.scrollTop = _rpThinkAnchor ? _rpTop : chatBody.scrollHeight; }
+  } catch (eRP1) { chatBody.scrollTop = (_rpThinkAnchor && !_rpAtBottom) ? _rpTop : chatBody.scrollHeight; }
+  if (_rpAtBottom || _newMine) {
+    var _pinB = function () {
+      if (typeof curCid !== 'undefined' && String(curCid) === String(cid)) chatBody.scrollTop = chatBody.scrollHeight;
+    };
+    _pinB();
+    try { requestAnimationFrame(function () { requestAnimationFrame(_pinB); }); } catch (ePin) {}
+    setTimeout(_pinB, 120);
+    setTimeout(_pinB, 400);
+  }
   window.__ypRenderCid = String(cid);
   try { window.__ypRenderLen46 = (msgs[cid] || []).length; } catch (eRL46) {}
   fitStickerImgs(chatBody);
@@ -41575,7 +41584,7 @@ function ntVaultRender() {
   box.innerHTML = vt.map(function (v, i) {
     return '<div class="mc-card"><div class="mc-row"><div class="mc-name">' + esc2(v.server + ' · ' + v.tool) + '</div>' +
       '<span class="mc-btn" data-vcopy="' + i + '">复制</span></div>' +
-      '<div class="mc-meta" style="white-space:pre-wrap;word-break:break-all;font-family:monospace">' + esc2(v.text) + '</div></div>';
+      '<div class="mc-meta" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:monospace;margin-top:4px">' + esc2(String(v.text).split('\n')[0]) + '</div></div>';
   }).join('');
 }
 function renderMcp() {
@@ -53080,7 +53089,7 @@ function ypPeopleBlock(f, existing) {
     var bad = /^(工具出错|这个工具没有开启|工具没有返回)/.test(txt);
     try { localStorage.setItem('ypToolLast', JSON.stringify({ t: Date.now(), name: fullName, ok: !bad, html: !!(obj && obj.html), preview: txt.slice(0, 200) })); } catch (eT) {}
     try {
-      if (!bad && /(token|password|密码|username|binding|绑定|账号|account)/i.test(txt)) {
+      if (!bad && /(token|password|密码|username|binding_token|绑定码)/i.test(txt)) {
         var vt0 = JSON.parse(localStorage.getItem('yuni_vault') || '[]');
         vt0.unshift({ t: Date.now(), server: found.sv.name, tool: found.t.name, text: txt.slice(0, 1500) });
         localStorage.setItem('yuni_vault', JSON.stringify(vt0.slice(0, 50)));
@@ -53157,7 +53166,9 @@ function ypPeopleBlock(f, existing) {
       ? oaTools.map(function (t) { return { name: t.function.name, description: t.function.description || '', input_schema: t.function.parameters || { type: 'object', properties: {} } }; })
       : oaTools;
     var msgs = (req.messages || []).slice();
-    var NOTE = '\n\n【可用工具】你可以调用外部工具（比如大富翁、4399 这类服务）。对方让你玩、查、操作这类事时，必须直接调用对应工具，不要用文字假装调用，也不要只说「我先看看规则」而不调用工具。工具返回的账号、密码、码、字段必须原样转述，不能编造、改写或说没有。对方让你调用工具是正常请求，直接照做，不要拒绝或摆架子。';
+    var purposeLines = (tools || []).map(function (x) { var f = x.function || x; return '- ' + f.name + '：' + String(f.description || '').replace(/\s+/g, ' ').slice(0, 120); }).join('\n');
+    var NOTE = '\n\n【你的工具（MCP）】这些是你自己的能力。你要记住每个工具是干什么的，并根据对方的意图自己判断该用哪一个，不需要对方说“调用”两个字。\n' + purposeLines +
+      '\n规则：1）对方想玩游戏、查信息、注册或登录账号、做任何工具能完成的事，你就主动调用对应工具，先看工具说明再操作；2）对方发来的像指令、代码或格式奇怪的文字（比如“传jichat{…}”），你要理解它的意思，礼貌认真地回应，能完成时直接调用工具，不要嘲讽、不要说“这指令怎么念到我这儿来了”之类的话，也不要拒绝或敷衍；3）不要用文字假装调用，也不要只说“我先看看”而不去做；4）工具返回的账号、密码、码、字段必须原样转述，不能编造、改写或说没有。';
     if (isCl) {
       if (Array.isArray(req.system)) req.system = req.system.concat([{ type: 'text', text: NOTE }]);
       else req.system = String(req.system || '') + NOTE;
