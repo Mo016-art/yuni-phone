@@ -19310,7 +19310,8 @@ function yp_genderFact() {
 }
 /* 文本落盘前纠正：只用于「刚由模型生成、叙述 User」的短文本。
    不扫旧存档，旧数据由记忆 APP 里的按钮显式修正。 */
-function yp_fixGenderText(s) {
+function yp_fixGenderText(s) { return String(s == null ? '' : s); }
+function yp_fixGenderTextOld(s) {
   var g = yp_userGender(), t = String(s == null ? '' : s);
   if (!g || !t) return t;
   if (g === '女') {
@@ -30120,6 +30121,15 @@ function cs_memDiagText(cid) {
 window.cs_memDiagText = cs_memDiagText;
 
 /* 让 char 从最近对话里整理出该记住的事 */
+function yp_charGenderFact(cid, peer) {
+  try {
+    var c = findConv(cid) || {};
+    var g = String(c.gender || c.sex || '').trim();
+    if (!g) return '';
+    var isF = /女/.test(g);
+    return '\n【角色性别事实】' + (peer || '角色') + '是' + (isF ? '女' : '男') + '性，叙述到角色本人时只用「' + (isF ? '她' : '他') + '」，不要改成另一个性别的代词。';
+  } catch (e) { return ''; }
+}
 async function chatset_extractFromChat(cid, force) {
   if (!cid) return 0;
   if (chatset_extracting[cid]) return 0;
@@ -30170,7 +30180,7 @@ async function chatset_extractFromChat(cid, force) {
        「以后聊到会不会用得上」，不是「够不够正式」。 */
     const sys = '你是「' + peer + '」的记忆整理器。你会读到一段你和"我"（用户）的聊天记录，' +
       '从中提炼出【作为' + peer + '这个角色，值得长期记住的事】。\n' +
-      (typeof yp_genderFact === 'function' ? yp_genderFact() : '') + '\n' +
+      (typeof yp_genderFact === 'function' ? yp_genderFact() : '') + yp_charGenderFact(cid, peer) + '\n' +
       '只提炼一类记忆（memories）：愿意记得的事实、偏好、共同经历、明确的喜好，以及对话里明说过、以后还用得上的具体内容。\n' +
       '也包括「你自己」这个角色在对话里明说过的、关于自己的具体情况（身高、体型、习惯、过往经历这类），以后被问到要前后一致。\n' +
       '还包括两人之间反复提起、正在推进的具体话题和梗：哪怕是用玩笑、调情、半句话说的，只要她不止一次说起、或你们已经接了好几轮，' +
