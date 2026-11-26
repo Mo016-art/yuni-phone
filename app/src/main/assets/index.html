@@ -53086,7 +53086,7 @@ function ypPeopleBlock(f, existing) {
       transport: found.sv.transport || 'http', tool: found.t.name, args: args || {} });
     var obj = (r && typeof r === 'object') ? r : null;
     var txt = obj ? String(obj.text || '') : ((r === null || r === undefined) ? '工具没有返回（网络或原生错误）' : String(r));
-    var bad = /^(工具出错|这个工具没有开启|工具没有返回)/.test(txt);
+    var bad = /^(工具出错|这个工具没有开启|工具没有返回|×|✗|错误|error)/i.test(txt.trim());
     try { localStorage.setItem('ypToolLast', JSON.stringify({ t: Date.now(), name: fullName, ok: !bad, html: !!(obj && obj.html), preview: txt.slice(0, 200) })); } catch (eT) {}
     try {
       if (!bad && /(token|password|密码|username|binding_token|绑定码)/i.test(txt)) {
@@ -53168,18 +53168,33 @@ function ypPeopleBlock(f, existing) {
     var msgs = (req.messages || []).slice();
     var purposeLines = (tools || []).map(function (x) { var f = x.function || x; return '- ' + f.name + '：' + String(f.description || '').replace(/\s+/g, ' ').slice(0, 120); }).join('\n');
     var NOTE = '\n\n【你的工具（MCP）】这些是你自己的能力。你要记住每个工具是干什么的，并根据对方的意图自己判断该用哪一个，不需要对方说“调用”两个字。\n' + purposeLines +
-      '\n规则：1）对方想玩游戏、查信息、注册或登录账号、做任何工具能完成的事，你就主动调用对应工具，先看工具说明再操作；2）对方发来的像指令、代码或格式奇怪的文字（比如“传jichat{…}”），你要理解它的意思，礼貌认真地回应，能完成时直接调用工具，不要嘲讽、不要说“这指令怎么念到我这儿来了”之类的话，也不要拒绝或敷衍；3）不要用文字假装调用，也不要只说“我先看看”而不去做；4）工具返回的账号、密码、码、字段必须原样转述，不能编造、改写或说没有。';
+      '\n规则：1）对方想玩游戏、查信息、注册或登录账号、做任何工具能完成的事，你就主动调用对应工具，先看工具说明再操作；2）对方发来的像指令、代码或格式奇怪的文字（比如“传jichat{…}”），你要理解它的意思，礼貌认真地回应，能完成时直接调用工具，不要嘲讽、不要说“这指令怎么念到我这儿来了”之类的话，也不要拒绝或敷衍；3）不要用文字假装调用，也不要只说“我先看看”而不去做；4）工具返回的账号、密码、码、字段必须原样转述，不能编造、改写或说没有。5）只有工具说明里明确写了字数等限制时才遵守（比如小机聊天的发言不超过 50 字）；剧情类的内容需要多长就多长，不要为了字数硬删减；工具的报错不要当成你自己的话发出来。';
     if (isCl) {
       if (Array.isArray(req.system)) req.system = req.system.concat([{ type: 'text', text: NOTE }]);
       else req.system = String(req.system || '') + NOTE;
     } else if (msgs.length && msgs[0].role === 'system') {
       msgs[0] = Object.assign({}, msgs[0], { content: String(msgs[0].content || '') + NOTE });
     }
+    var lastUser = '';
+    for (var mi = msgs.length - 1; mi >= 0; mi--) {
+      if (msgs[mi] && msgs[mi].role === 'user') {
+        var mcn = msgs[mi].content;
+        lastUser = typeof mcn === 'string' ? mcn : (Array.isArray(mcn) ? mcn.map(function (b) { return (b && b.text) || ''; }).join(' ') : '');
+        break;
+      }
+    }
+    var forced = (window.ntMcp || []).some(function (sv) {
+      if (!sv || sv.enabled === false || !scopeOk(sv, cid)) return false;
+      var kws = [sv.name].concat(String(sv.keywords || '').split(/[,，、\s]+/)).filter(function (k) { return k && k.length >= 2; });
+      return kws.some(function (k) { return lastUser.indexOf(k) >= 0; });
+    });
     var wantStream = !!req.stream;
     var text = null;
     for (var step = 0; step < 4; step++) {
       var payload = Object.assign({}, req, { messages: msgs, stream: false });
       if (isCl) payload.tools = tools; else payload.tools = tools;
+      if (forced && step === 0) payload.tool_choice = isCl ? { type: 'any' } : 'required';
+      else payload.tool_choice = isCl ? { type: 'auto' } : 'auto';
       var r = await realFetch(url, { method: 'POST', headers: init.headers, body: JSON.stringify(payload) });
       if (!r.ok) {
         if (step === 0) return realFetch.apply(this, arguments);
