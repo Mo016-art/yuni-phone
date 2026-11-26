@@ -41162,6 +41162,15 @@ function ntSyncAll() {
 }
 setTimeout(ntSyncAll, 2500);
 setTimeout(ntSyncAll, 9000);
+setTimeout(function () {
+  if (!NT.ok) return;
+  NT.call('mcpList').then(function (cur) {
+    var bk = null; try { bk = JSON.parse(localStorage.getItem('yuni_mcp_backup') || 'null'); } catch (eR) {}
+    if (Array.isArray(bk) && bk.length && (!Array.isArray(cur) || cur.length === 0)) {
+      NT.call('mcpSave', { json: JSON.stringify(bk) });
+    }
+  });
+}, 5000);
 setInterval(function () { if (NT.ok && ntCfg().ball) { ntGuessChar(); ntPushChar(); } }, 180000);
 setInterval(function () { if (!document.hidden) ntDrainInbox(); }, 20000);
 
@@ -41406,7 +41415,10 @@ function ntMcpLoad(cb) {
     if (cb) cb();
   });
 }
-function ntMcpStore() { return NT.call('mcpSave', { json: JSON.stringify(ntMcp) }); }
+function ntMcpStore() {
+  try { localStorage.setItem('yuni_mcp_backup', JSON.stringify(ntMcp)); } catch (eB) {}
+  return NT.call('mcpSave', { json: JSON.stringify(ntMcp) });
+}
 function ntMcpTokens(d) {
   var n = 0;
   (d.tools || []).forEach(function (t) { if (t.enabled) n += (String(t.name || '') + String(t.description || '') + JSON.stringify(t.inputSchema || {})).length; });
