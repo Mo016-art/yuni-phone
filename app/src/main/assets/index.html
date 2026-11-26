@@ -41575,7 +41575,7 @@ function ntMcpDiag() {
     var cl = d.call ? new Date(d.call.t).toLocaleTimeString() + ' · ' + d.call.name + ' · ' + (d.call.ok ? '成功' : '失败：' + d.call.err) : '还没有调用过工具';
     var lg = []; try { lg = JSON.parse(localStorage.getItem('ypMcpLog') || '[]'); } catch (e3) {}
     var lgTxt = lg.slice(-6).reverse().map(function (x) {
-      return new Date(x.t).toLocaleTimeString() + ' · ' + (x.hit ? '命中' : '未命中') + ' · char「' + (x.name || '无') + '」' + (x.tools !== undefined ? ' · 工具 ' + x.tools : '') + (x.detail ? '<br>　服务：' + x.detail : '');
+      return new Date(x.t).toLocaleTimeString() + ' · ' + (x.hit ? '命中' : '未命中') + ' · char「' + (x.name || '无') + '」' + (x.tools !== undefined ? ' · 工具 ' + x.tools : '') + (x.detail ? '<br>　服务：' + x.detail : '') + (x.names ? '<br>　工具：' + x.names : '');
     }).join('<br>') || '还没有拦截到任何聊天请求';
     var nat = '<div style="margin-top:8px"><b>原生最近一次进入工具列表：</b>' + (d.start ? new Date(Number(d.start)).toLocaleTimeString() : '从未进入') + '</div>' +
       '<div><b>原生最近错误：</b>' + esc2(d.err || '无') + '</div><div><b>原生版本：</b>' + esc2(d.ver || '旧版（没有版本号，说明装的还是旧 apk）') + '</div>';
@@ -53101,13 +53101,13 @@ function ypPeopleBlock(f, existing) {
     var detail = Array.isArray(mlist) ? mlist.map(function (s) {
       return (s.name || '?') + ':' + (s.enabled !== false ? '启用' : '停用') + ':' + (s.scope || 'all') + ':' + ((s.tools || []).filter(function (x) { return x.enabled; }).length) + '个开';
     }).join(' | ') : ('列表非数组:' + (mlist === null ? 'null' : typeof mlist) + '，耗时' + took + 'ms，桥接' + (window.YuniBridge ? '有' : '无'));
-    logIt({ url: url.slice(-40), hit: true, name: nm, cid: cid, tools: oaTools.length, detail: detail });
+    logIt({ url: url.slice(-40), hit: true, name: nm, cid: cid, tools: oaTools.length, detail: detail, names: oaTools.map(function (x) { return x.function.name; }).join(', ') });
     if (!Array.isArray(oaTools) || !oaTools.length) return realFetch.apply(this, arguments);
     var tools = isCl
       ? oaTools.map(function (t) { return { name: t.function.name, description: t.function.description || '', input_schema: t.function.parameters || { type: 'object', properties: {} } }; })
       : oaTools;
     var msgs = (req.messages || []).slice();
-    var NOTE = '\n\n【可用工具】你可以调用外部工具（比如大富翁、4399 这类服务）。对方让你玩、查、操作这类事时，必须直接调用对应工具，不要用文字假装调用，也不要只说「我先看看规则」而不调用工具。';
+    var NOTE = '\n\n【可用工具】你可以调用外部工具（比如大富翁、4399 这类服务）。对方让你玩、查、操作这类事时，必须直接调用对应工具，不要用文字假装调用，也不要只说「我先看看规则」而不调用工具。工具返回的账号、密码、码、字段必须原样转述，不能编造、改写或说没有。';
     if (isCl) {
       if (Array.isArray(req.system)) req.system = req.system.concat([{ type: 'text', text: NOTE }]);
       else req.system = String(req.system || '') + NOTE;
