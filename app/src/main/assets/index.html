@@ -53044,9 +53044,14 @@ function ypPeopleBlock(f, existing) {
     var txt = obj ? String(obj.text || '') : ((r === null || r === undefined) ? '工具没有返回（网络或原生错误）' : String(r));
     var bad = /^(工具出错|这个工具没有开启|工具没有返回)/.test(txt);
     try { localStorage.setItem('ypToolLast', JSON.stringify({ t: Date.now(), name: fullName, ok: !bad, html: !!(obj && obj.html), preview: txt.slice(0, 200) })); } catch (eT) {}
-    var longTok = (!bad && txt.length >= 16) ? txt.trim() : '';
-    if (longTok.length > 2000) longTok = '';
-    ypToolCard(cid, found.sv.name, found.t.name, bad ? txt : '成功', obj && obj.html ? obj.html : '', longTok);
+    var longTok = '';
+    if (!bad && txt.trim().length >= 16) {
+      longTok = txt.trim();
+      try { var jt = JSON.parse(longTok); if (jt && typeof jt.token === 'string' && jt.token) longTok = jt.token; } catch (eJ) {}
+      if (longTok.length > 2000) longTok = '';
+    }
+    ypToolCard(cid, found.sv.name, found.t.name, bad ? txt : '成功', obj && obj.html ? obj.html : '', '');
+    if (longTok && typeof receiveMsg === 'function') { try { receiveMsg(cid, longTok); } catch (eR) {} }
     return txt;
   }
   function sseOpenAI(text) {
