@@ -8968,7 +8968,7 @@ function renderChat(cid) {
   try {
     var _keep = !_newMine && (window.YP_KEEP_SCROLL_POS !== false) && _rpSameCid && !_rpAtBottom && _rpH > 0;
     /* v1816：正在看展开的思考链时保留位置；但用户刚发消息一律以新消息为准 */
-    if (_rpThinkAnchor && !_newMine) _keep = true;
+    if (_rpThinkAnchor && !_newMine && !_rpAtBottom) _keep = true;
     if (_keep) {
       var _rpNewH = chatBody.scrollHeight || 0;
       var _rpDelta = Math.max(0, _rpNewH - _rpH);
@@ -8984,7 +8984,7 @@ function renderChat(cid) {
     }
     /* 按同一条 mid 对齐：新 UNSENT 插在上方 / 新消息追加在下方都抵消掉，
        你正在看的那一条仍停在原来的屏幕高度。找不到（被删了）就保留上面结果。 */
-    if (_rpThinkAnchor && _rpThinkAnchor.mid && !_newMine) {
+    if (_rpThinkAnchor && _rpThinkAnchor.mid && !_newMine && !_rpAtBottom) {
       var _el2 = chatBody.querySelector('.think-row[data-mid="' + _rpThinkAnchor.mid + '"] .think-bub');
       if (_el2) {
         var _br2 = chatBody.getBoundingClientRect(), _r2 = _el2.getBoundingClientRect();
@@ -9205,15 +9205,19 @@ function actCopy(m) {
      描述被剥光后至少给个 [图片] 短标签，别弹「没有可复制的文字」。 */
   const t = cs_cleanVisible(msgPlain(m)) || (typeof msgQuoteText === 'function' ? msgQuoteText(m) : '');
   if (!t) { toastOf('这条没有可复制的文字'); return; }
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t);
-    else {
-      const ta = document.createElement('textarea'); ta.value = t;
-      ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
-    }
-    toastOf('已复制');
-  } catch (e) { toastOf('复制失败'); }
+try {
+const fallbackCopy = () => {
+const ta = document.createElement('textarea'); ta.value = t;
+ta.style.position = 'fixed'; ta.style.opacity = '0';
+document.body.appendChild(ta); ta.focus(); ta.select();
+let ok = false; try { ok = document.execCommand('copy'); } catch (e2) {}
+ta.remove();
+toastOf(ok ? '已复制' : '复制失败，请长按文字手动选择');
+};
+if (navigator.clipboard && navigator.clipboard.writeText) {
+navigator.clipboard.writeText(t).then(() => toastOf('已复制'), fallbackCopy);
+} else fallbackCopy();
+} catch (e) { toastOf('复制失败'); }
 }
 function toastOf(t) { try { if (typeof mmToast === 'function') mmToast(t); else alert(t); } catch (e) {} }
 
@@ -41282,6 +41286,13 @@ function ntBind() {
   bd.onclick = function (e) {
     if (!($('#ntState') || $('#bgState') || $('#mcpState'))) return;
     var t = e.target;
+    var vc = t.closest && t.closest('[data-vcopy]');
+    if (vc) {
+      var vlist = []; try { vlist = JSON.parse(localStorage.getItem('yuni_vault') || '[]'); } catch (eC) {}
+      var vrec = vlist[parseInt(vc.getAttribute('data-vcopy'), 10)];
+      if (vrec && window.ypCopyText) window.ypCopyText(vrec.text, vc);
+      return;
+    }
     var tg = t.closest && t.closest('.mc-tog');
     if (tg) { ntMcpToggleSrv(tg); return; }
     var mc = t.closest && t.closest('.mcchip');
@@ -41556,11 +41567,23 @@ function ntMcpAct(act, b) {
   else if (act === 'mcpedit') ntMcpEditAt(parseInt(b.getAttribute('data-i'), 10));
   else if (act === 'mcpdel') ntMcpDel(parseInt(b.getAttribute('data-i'), 10));
 }
+function ntVaultRender() {
+  var box = $('#ntVault'); if (!box) return;
+  mcInstallCss();
+  var vt = []; try { vt = JSON.parse(localStorage.getItem('yuni_vault') || '[]'); } catch (e) {}
+  if (!vt.length) { box.innerHTML = '<div class="mc-card"><div class="mc-name">还没有记录</div></div>'; return; }
+  box.innerHTML = vt.map(function (v, i) {
+    return '<div class="mc-card"><div class="mc-row"><div class="mc-name">' + esc2(v.server + ' · ' + v.tool) + '</div>' +
+      '<span class="mc-btn" data-vcopy="' + i + '">复制</span></div>' +
+      '<div class="mc-meta" style="white-space:pre-wrap;word-break:break-all;font-family:monospace">' + esc2(v.text) + '</div></div>';
+  }).join('');
+}
 function renderMcp() {
   mcInstallCss();
   var html =
     '<div id="mcpState" style="display:none"></div>' +
-    '<div class="mc-h" style="margin-top:6px">已添加</div><div id="ntMcpList"></div>' +
+    '<div class="mc-h" style="margin-top:6px">账号记录（工具返回自动保存）</div><div id="ntVault"></div>' +
+    '<div class="mc-h">已添加</div><div id="ntMcpList"></div>' +
     '<div class="mc-row" style="margin:4px 0 0"><span class="mc-btn fill" data-nt="mcpnew">新建服务</span></div>' +
     '<div class="mc-h">诊断</div><div class="mc-card" id="mcpDiag" style="font-size:12.5px;line-height:1.6;color:#111">读取中…</div>' +
     '<div class="mc-h">编辑</div><div class="mc-card">' +
@@ -41574,7 +41597,7 @@ function renderMcp() {
       '<div class="mc-row" style="margin-top:8px"><span class="mc-btn" data-nt="mcptest">测试连接</span><span class="mc-btn fill" data-nt="mcpsave">保存</span></div>' +
       '<div id="ntMcpDraft"></div>' +
     '</div><div style="height:28px"></div>';
-  goSub('外部工具 MCP', html, function () { ntBind(); ntMcpLoad(ntMcpRenderList); ntMcpRenderDraft(); ntMcpDiag(); });
+  goSub('MCP', html, function () { ntBind(); ntMcpLoad(ntMcpRenderList); ntMcpRenderDraft(); ntMcpDiag(); ntVaultRender(); });
 }
 function ntMcpDiag() {
   var el = $('#mcpDiag'); if (!el) return;
@@ -41698,7 +41721,7 @@ function renderMain() {
 '<div class="set-grp">' +
 row('nt', '真机陪伴', '悬浮球 · APP 管控 · 开机自启', '', null, 'native') +
 row('bgmsg', '通知与后台消息', '系统通知、主动找我', '', null, 'bgmsg') +
-row('mcp', '外部工具 MCP', '让 char 调用外部服务', '', null, 'mcp') +
+row('mcp', 'MCP', '让 char 调用外部服务', '', null, 'mcp') +
 '</div>' +
     '<div class="set-grp">' +
       row('ex', '导出数据', '全系统备份（含图片与 App 数据）', '', null, 'export') +
@@ -53013,7 +53036,7 @@ function ypPeopleBlock(f, existing) {
   /* 工具卡片：一行窄小的标签，居中 */
   window.ypToolCardRow = function (m) {
     var esc3 = function (s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
-    return '<div class="bub-row sys" style="width:100%;text-align:center"><span style="display:inline-block;max-width:80%;font-size:11px;line-height:1.4;color:#8A7A8D;background:rgba(200,180,220,.14);border-radius:999px;padding:2px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle">' + esc3(m.t) + '</span></div>';
+    return '<div class="bub-row sys" style="width:100%;text-align:center"><span style="display:inline-block;max-width:90%;font-size:12px;line-height:1.6;color:#8A7A8D;background:rgba(200,180,220,.14);border-radius:999px;padding:4px 14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle">' + esc3(m.t) + '</span></div>';
   };
   /* 第四步：界面网页渲染成聊天里的一张卡片（沙盒 iframe，不能访问小手机本身） */
   window.ypMcpUiRow = function (m) {
@@ -53056,6 +53079,13 @@ function ypPeopleBlock(f, existing) {
     var txt = obj ? String(obj.text || '') : ((r === null || r === undefined) ? '工具没有返回（网络或原生错误）' : String(r));
     var bad = /^(工具出错|这个工具没有开启|工具没有返回)/.test(txt);
     try { localStorage.setItem('ypToolLast', JSON.stringify({ t: Date.now(), name: fullName, ok: !bad, html: !!(obj && obj.html), preview: txt.slice(0, 200) })); } catch (eT) {}
+    try {
+      if (!bad && /(token|password|密码|username|binding|绑定|账号|account)/i.test(txt)) {
+        var vt0 = JSON.parse(localStorage.getItem('yuni_vault') || '[]');
+        vt0.unshift({ t: Date.now(), server: found.sv.name, tool: found.t.name, text: txt.slice(0, 1500) });
+        localStorage.setItem('yuni_vault', JSON.stringify(vt0.slice(0, 50)));
+      }
+    } catch (eV) {}
     var longTok = '';
     if (!bad && txt.trim().length >= 16) {
       longTok = txt.trim();
