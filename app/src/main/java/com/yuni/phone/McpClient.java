@@ -199,4 +199,72 @@ final class McpClient {
         }
         return sb.toString();
     }
+
+    // 读取界面资源（ui:// 开头），返回 HTML 文本
+    static String resourceRead(String url, String hdr, String val, String transport, String uri) throws Exception {
+        JSONObject req = new JSONObject().put("jsonrpc", "2.0").put("id", 4).put("method", "resources/read")
+            .put("params", new JSONObject().put("uri", uri));
+        JSONObject j = call(url, hdr, val, transport, req, 4);
+        if (j.has("error")) return "";
+        JSONObject res = j.optJSONObject("result");
+        JSONArray cs = res == null ? null : res.optJSONArray("contents");
+        if (cs == null || cs.length() == 0) return "";
+        JSONObject o = cs.optJSONObject(0);
+        return o == null ? "" : o.optString("text", "");
+    }
+
+    // 调用工具：返回 {text: 文字结果, html: 界面网页（没有就是空串）}
+    static JSONObject callToolRich(String url, String hdr, String val, String transport, String tool, JSONObject args) throws Exception {
+        JSONObject req = new JSONObject().put("jsonrpc", "2.0").put("id", 3).put("method", "tools/call")
+            .put("params", new JSONObject().put("name", tool).put("arguments", args));
+        JSONObject j = call(url, hdr, val, transport, req, 3);
+        if (j.has("error")) throw new Exception(clip(String.valueOf(j.opt("error")), 120));
+        JSONObject res = j.optJSONObject("result");
+        StringBuilder sb = new StringBuilder();
+        String html = "";
+        String uiUri = "";
+        if (res != null) {
+            JSONArray cs = res.optJSONArray("content");
+            if (cs != null) {
+                for (int i = 0; i < cs.length(); i++) {
+                    JSONObject o = cs.optJSONObject(i);
+                    if (o == null) continue;
+                    String type = o.optString("type");
+                    if ("text".equals(type)) {
+                        sb.append(o.optString("text")).append('\n');
+                    } else if ("resource".equals(type)) {
+                        JSONObject r = o.optJSONObject("resource");
+                        if (r == null) continue;
+                        String mt = r.optString("mimeType", "");
+                        String ruri = r.optString("uri", "");
+                        if (r.has("text") && (mt.contains("html") || ruri.startsWith("ui://"))) {
+                            if (html.length() == 0) html = r.optString("text");
+                        } else if (r.has("text")) {
+                            sb.append(r.optString("text")).append('\n');
+                        } else if (ruri.startsWith("ui://")) {
+                            uiUri = ruri;
+                        }
+                    } else if ("resource_link".equals(type)) {
+                        String ruri = o.optString("uri", "");
+                        if (ruri.startsWith("ui://")) uiUri = ruri;
+                    }
+                }
+            }
+            JSONObject meta = res.optJSONObject("_meta");
+            if (uiUri.length() == 0 && meta != null) {
+                JSONObject ui = meta.optJSONObject("ui");
+                if (ui != null) uiUri = ui.optString("resourceUri", "");
+            }
+        }
+        if (html.length() == 0 && uiUri.length() > 0) {
+            try {
+                html = resourceRead(url, hdr, val, transport, uiUri);
+            } catch (Exception e) {
+            }
+        }
+        JSONObject out = new JSONObject();
+        out.put("text", sb.toString());
+        out.put("html", html);
+        return out;
+    }
 }

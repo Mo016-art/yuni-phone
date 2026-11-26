@@ -558,11 +558,13 @@ public class MainActivity extends Activity {
             String tl = a.optString("tool");
             try {
                 JSONObject args = a.optJSONObject("args");
-                String res = McpClient.callTool(a.optString("url"), a.optString("hdr", ""), a.optString("val", ""),
+                JSONObject rich = McpClient.callToolRich(a.optString("url"), a.optString("hdr", ""), a.optString("val", ""),
                     a.optString("transport", "http"), tl, args == null ? new JSONObject() : args);
+                String res = rich.optString("text");
                 sp().edit().putString("diag_call", new JSONObject().put("t", System.currentTimeMillis())
                     .put("name", tl).put("ok", true).put("len", res.length()).toString()).apply();
-                return JSONObject.quote(McpNames.clip(res, 4000));
+                rich.put("text", McpNames.clip(res, 4000));
+                return rich.toString();
             } catch (Exception ex) {
                 sp().edit().putString("diag_call", new JSONObject().put("t", System.currentTimeMillis())
                     .put("name", tl).put("ok", false).put("err", McpNames.clip(String.valueOf(ex.getMessage()), 120)).toString()).apply();
