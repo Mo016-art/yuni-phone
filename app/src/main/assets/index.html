@@ -30053,6 +30053,19 @@ function chatset_renderBehaviorConstraintsModule() {
 /* ===================== 记忆 / 话题：由 char 通过 API 自动整理 ===================== */
 let chatset_extracting = {}, chatset_lastExtract = {};
 function chatset_extractCid() { try { return (typeof curCid !== 'undefined' && curCid) ? String(curCid) : ''; } catch (e) { return ''; } }
+function yp_speakerFact(cid, peer) {
+  try {
+    var c = findConv(cid) || {};
+    var cg = String(c.gender || c.sex || '').trim();
+    var ug = (typeof yp_userGender === 'function') ? (yp_userGender() || '') : '';
+    var un = (typeof yp_userName === 'function') ? (yp_userName() || '') : '';
+    var lines = ['【说话人对应表】'];
+    lines.push('- 聊天记录里「我：」就是用户' + (un ? '「' + un + '」' : '') + (ug ? '，' + ug + '性' : '') + '；叙述到用户时只用' + (ug === '男' ? '「他」' : '「她」') + '或直接叫名字。');
+    if (cg) lines.push('- 「' + (peer || '角色') + '：」是角色本人，' + cg + '性；叙述到角色时只用' + (/女/.test(cg) ? '「她」' : '「他」') + '。');
+    lines.push('- 每条记忆里谁说了什么、谁做了什么，必须按上面的对应表归属，不能把用户的话写成角色说的，也不能互换代词。');
+    return '\n' + lines.join('\n');
+  } catch (e) { return ''; }
+}
 function chatset_recentTalk(cid, n) {
   try {
     const all = (typeof msgs !== 'undefined' && msgs[cid]) ? msgs[cid] : [];
@@ -30180,7 +30193,7 @@ async function chatset_extractFromChat(cid, force) {
        「以后聊到会不会用得上」，不是「够不够正式」。 */
     const sys = '你是「' + peer + '」的记忆整理器。你会读到一段你和"我"（用户）的聊天记录，' +
       '从中提炼出【作为' + peer + '这个角色，值得长期记住的事】。\n' +
-      (typeof yp_genderFact === 'function' ? yp_genderFact() : '') + yp_charGenderFact(cid, peer) + '\n' +
+      (typeof yp_genderFact === 'function' ? yp_genderFact() : '') + yp_charGenderFact(cid, peer) + yp_speakerFact(cid, peer) + '\n' +
       '只提炼一类记忆（memories）：愿意记得的事实、偏好、共同经历、明确的喜好，以及对话里明说过、以后还用得上的具体内容。\n' +
       '也包括「你自己」这个角色在对话里明说过的、关于自己的具体情况（身高、体型、习惯、过往经历这类），以后被问到要前后一致。\n' +
       '还包括两人之间反复提起、正在推进的具体话题和梗：哪怕是用玩笑、调情、半句话说的，只要她不止一次说起、或你们已经接了好几轮，' +
