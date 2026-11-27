@@ -53211,6 +53211,9 @@ function ypPeopleBlock(f, existing) {
       var kws = [sv.name].concat(String(sv.keywords || '').split(/[,，、\s]+/)).filter(function (k) { return k && k.length >= 2; });
       return kws.some(function (k) { return lastUser.indexOf(k) >= 0; });
     });
+    var ACT_RE = /(带我|带你|前往|出发|进入|去(?!吃|洗|睡|上厕|做饭|上班|上学)|开始玩|陪我玩|一起玩|探索|注册|登录|帮我查|查一下|下单|购买)/;
+    if (!forced && (window.ntMcp || []).some(function (sv) { return sv && sv.enabled !== false && scopeOk(sv, cid); })
+        && ACT_RE.test(lastUser) && !/[吗？?]\s*$/.test(lastUser.trim())) forced = true;
     var wantStream = !!req.stream;
     var text = null;
     for (var step = 0; step < 4; step++) {
