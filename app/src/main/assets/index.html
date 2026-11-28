@@ -53107,11 +53107,18 @@ function ypPeopleBlock(f, existing) {
       ypToolCard(cid, '未知服务', fullName, '这个工具没有开启或不适用于当前 char');
       return '这个工具没有开启或不适用于当前 char';
     }
+    var cdKey = String(found.sv.name) + '|' + String(found.t.name);
+    window.__ypAccLast = window.__ypAccLast || {};
+    if (/account/i.test(found.t.name) && window.__ypAccLast[cdKey] && window.__ypAccLast[cdKey].ok
+        && Date.now() - window.__ypAccLast[cdKey].t < 300000) {
+      return window.__ypAccLast[cdKey].txt + '\n（这个账号工具刚刚已经返回过结果了，本轮不要重复调用，直接用上面的结果。）';
+    }
     var r = await bridge('mcpCallDirect', { url: found.sv.url, hdr: found.sv.hdr || '', val: found.sv.val || '',
       transport: found.sv.transport || 'http', tool: found.t.name, args: args || {} });
     var obj = (r && typeof r === 'object') ? r : null;
     var txt = obj ? String(obj.text || '') : ((r === null || r === undefined) ? '工具没有返回（网络或原生错误）' : String(r));
     var bad = /^(工具出错|这个工具没有开启|工具没有返回|×|✗|错误|error)/i.test(txt.trim());
+    if (/account/i.test(found.t.name)) window.__ypAccLast[cdKey] = { t: Date.now(), ok: !bad, txt: txt };
     try { localStorage.setItem('ypToolLast', JSON.stringify({ t: Date.now(), name: fullName, ok: !bad, html: !!(obj && obj.html), preview: txt.slice(0, 200) })); } catch (eT) {}
     try {
       if (!bad && /(token|password|密码|username|binding_token|绑定码)/i.test(txt)) {
