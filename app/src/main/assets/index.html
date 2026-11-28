@@ -53218,19 +53218,20 @@ function ypPeopleBlock(f, existing) {
     var forced = (window.ntMcp || []).some(function (sv) {
       if (!sv || sv.enabled === false || !scopeOk(sv, cid)) return false;
       var kws = [sv.name].concat(String(sv.keywords || '').split(/[,，、\s]+/)).filter(function (k) { return k && k.length >= 2; });
-      return lastUser.trim().length >= 4 && kws.some(function (k) { return lastUser.indexOf(k) >= 0; });
+      return lastUser.trim().length >= 2 && kws.some(function (k) { return lastUser.indexOf(k) >= 0; });
     });
-    var ACT_RE = /(带我|带你|前往|出发|进入|去(?!吃|洗|睡|上厕|做饭|上班|上学)|开始玩|陪我玩|一起玩|探索|注册|登录|帮我查|查一下|下单|购买)/;
-    if (!forced && (window.ntMcp || []).some(function (sv) { return sv && sv.enabled !== false && scopeOk(sv, cid); })
-        && ACT_RE.test(lastUser) && !/[吗？?]\s*$/.test(lastUser.trim())) forced = true;
+    var ACT_RE = /(带我|带你|你去|你快去|去找|前往|出发|进入|开始玩|陪我玩|一起玩|探索|注册|登录|帮我查|查一下|下单|购买)/;
+    if (!forced && /(mcp|MCP|工具|调用|外部服务)/.test(lastUser) && (window.ntMcp || []).some(function (sv) { return sv && sv.enabled !== false && scopeOk(sv, cid); })) forced = true;
     var wantStream = !!req.stream;
     var text = null;
     var forcedRetried = false, toolsRan = false, nudged = false;
     for (var step = 0; step < 4; step++) {
       var payload = Object.assign({}, req, { messages: msgs, stream: false });
-      if (isCl) payload.tools = tools; else payload.tools = tools;
-      if (forced && step === 0) payload.tool_choice = isCl ? { type: 'any' } : 'required';
-      else payload.tool_choice = isCl ? { type: 'auto' } : 'auto';
+      if (forced) {
+        payload.tools = tools;
+        if (step === 0) payload.tool_choice = isCl ? { type: 'any' } : 'required';
+        else payload.tool_choice = isCl ? { type: 'auto' } : 'auto';
+      } else { delete payload.tools; delete payload.tool_choice; }
       var r = await realFetch(url, { method: 'POST', headers: init.headers, body: JSON.stringify(payload) });
       if (!r.ok) {
         if (step === 0) return realFetch.apply(this, arguments);
