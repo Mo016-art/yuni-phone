@@ -52973,6 +52973,7 @@ function ypPeopleBlock(f, existing) {
       return String(s || '') + '\n\n【活人感·优先级最高，覆盖上面所有「关心、追问、表态」的写法】\n' +
         '像真人发微信：一句话能说清就不说两句。条数按聊天设置来，不额外限制。\n' +
         '不要只看字面意思，要看话里的深意和动机：撒娇、暧昧、试探、激将、调情时，顺着对方的情绪接，不要字面较真，也不要讲道理。小情侣之间的“爸爸”“妈妈”“宝宝”这类称呼是情趣，不要当成真实的家庭关系去追问或纠正。\n' +
+        '称呼一定要对：对方说的「你」指你自己（char），「我」指对方本人，不要把对方的话安到你身上，也不要把你的话说成对方的。\n' +
         '先看对方的语气：他在开玩笑、夸张、找借口，就顺着接、调侃、拆穿，不当真去追问身体。\n' +
         '只有真的严重（真晕倒、受伤、在危险里）才认真，也只说一件事。\n' +
         '不要分析、不要下结论、不要当小老师讲道理，不要自己演一段内心戏（比如「我这边听着有点发毛」这种）。\n' +
@@ -53210,14 +53211,14 @@ function ypPeopleBlock(f, existing) {
     var forced = (window.ntMcp || []).some(function (sv) {
       if (!sv || sv.enabled === false || !scopeOk(sv, cid)) return false;
       var kws = [sv.name].concat(String(sv.keywords || '').split(/[,，、\s]+/)).filter(function (k) { return k && k.length >= 2; });
-      return kws.some(function (k) { return lastUser.indexOf(k) >= 0; });
+      return lastUser.trim().length >= 4 && kws.some(function (k) { return lastUser.indexOf(k) >= 0; });
     });
     var ACT_RE = /(带我|带你|前往|出发|进入|去(?!吃|洗|睡|上厕|做饭|上班|上学)|开始玩|陪我玩|一起玩|探索|注册|登录|帮我查|查一下|下单|购买)/;
     if (!forced && (window.ntMcp || []).some(function (sv) { return sv && sv.enabled !== false && scopeOk(sv, cid); })
         && ACT_RE.test(lastUser) && !/[吗？?]\s*$/.test(lastUser.trim())) forced = true;
     var wantStream = !!req.stream;
     var text = null;
-    var forcedRetried = false;
+    var forcedRetried = false, toolsRan = false, nudged = false;
     for (var step = 0; step < 4; step++) {
       var payload = Object.assign({}, req, { messages: msgs, stream: false });
       if (isCl) payload.tools = tools; else payload.tools = tools;
@@ -53252,7 +53253,13 @@ function ypPeopleBlock(f, existing) {
           forcedRetried = true; msgs.push({ role: 'user', content: '[系统] 这一轮对方的请求需要外部工具，你必须先调用一个合适的工具，再回复。' }); step--; continue;
         }
         if (!mm) break;
-        if (!mm.tool_calls || !mm.tool_calls.length) { text = mm.content || ''; break; }
+        if (!mm.tool_calls || !mm.tool_calls.length) {
+        if (!String(mm.content || '').trim() && toolsRan && !nudged) {
+          nudged = true; msgs.push({ role: 'user', content: '[系统] 工具已经返回结果了。请根据工具结果，用角色自己的口吻回复对方一句话，不要再调用工具。' }); step--; continue;
+        }
+        text = mm.content || ''; break;
+      }
+        toolsRan = true;
         msgs.push({ role: 'assistant', content: mm.content || '', tool_calls: mm.tool_calls });
         for (var i = 0; i < mm.tool_calls.length; i++) {
           var tc = mm.tool_calls[i], args = {};
